@@ -1,11 +1,10 @@
 #!/bin/bash
-# Development environment setup for ZecDev Launchpad
-# Sets up Docker, dependencies, and validates the environment
+# Setup GitHub Actions self-hosted runner on WSL
+# This script guides you through setting up a runner on your laptop
 
 set -e
 
 # Colors
-RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
@@ -19,181 +18,141 @@ log_success() {
     echo -e "${GREEN}[OK]${NC} $1"
 }
 
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
+log_step() {
+    echo -e "${YELLOW}[STEP]${NC} $1"
 }
 
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  GitHub Actions Self-Hosted Runner Setup (WSL)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
 
-# Check if running on supported platform
-check_platform() {
-    log_info "Checking platform..."
-    
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        log_success "Running on Linux"
-        PLATFORM="linux"
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        log_warn "Running on macOS (best-effort support)"
-        PLATFORM="macos"
-    elif grep -qi microsoft /proc/version 2>/dev/null; then
-        log_success "Running on WSL (Windows Subsystem for Linux)"
-        PLATFORM="wsl"
-    else
-        log_error "Unsupported platform: $OSTYPE"
-        log_error "ZecDev Launchpad officially supports Linux. macOS/Windows are best-effort."
-        exit 1
-    fi
-}
+log_info "This script will guide you through setting up a GitHub Actions runner on WSL"
+echo ""
 
-# Check Docker installation
-check_docker() {
-    log_info "Checking Docker installation..."
-    
-    if ! command -v docker &> /dev/null; then
-        log_error "Docker is not installed"
-        log_info "Please install Docker: https://docs.docker.com/get-docker/"
-        exit 1
-    fi
-    
-    local docker_version=$(docker --version)
-    log_success "Docker found: $docker_version"
-    
-    # Check if Docker daemon is running
-    if ! docker ps &> /dev/null; then
-        log_error "Docker daemon is not running"
-        log_info "Please start Docker and try again"
-        exit 1
-    fi
-    
-    log_success "Docker daemon is running"
-}
+# Check if on WSL
+if ! grep -qi microsoft /proc/version; then
+    log_info "Note: This script is optimized for WSL, but can work on Linux too"
+fi
 
-# Check Docker Compose
-check_docker_compose() {
-    log_info "Checking Docker Compose..."
-    
-    if ! docker compose version &> /dev/null; then
-        log_error "Docker Compose v2 is not installed"
-        log_info "Please install Docker Compose: https://docs.docker.com/compose/install/"
-        exit 1
-    fi
-    
-    local compose_version=$(docker compose version)
-    log_success "Docker Compose found: $compose_version"
-}
+# Step 1: Prerequisites
+log_step "Step 1: Prerequisites Check"
+log_info "Checking Docker..."
+if ! command -v docker &> /dev/null; then
+    echo "❌ Docker not found. Please install Docker first:"
+    echo "   https://docs.docker.com/desktop/wsl/"
+    exit 1
+fi
+log_success "Docker is installed"
 
-# Check system resources
-check_resources() {
-    log_info "Checking system resources..."
-    
-    # Check available memory (Linux/WSL)
-    if [[ "$PLATFORM" == "linux" ]] || [[ "$PLATFORM" == "wsl" ]]; then
-        local total_mem=$(free -g | awk '/^Mem:/{print $2}')
-        if [ "$total_mem" -lt 4 ]; then
-            log_warn "System has less than 4GB RAM ($total_mem GB available)"
-            log_warn "Recommended: 4GB+ for smooth operation"
-        else
-            log_success "Memory: ${total_mem}GB available"
-        fi
-    fi
-    
-    # Check available disk space
-    local available_space=$(df -BG . | tail -1 | awk '{print $4}' | sed 's/G//')
-    if [ "$available_space" -lt 5 ]; then
-        log_warn "Less than 5GB disk space available"
-        log_warn "Recommended: 5GB+ for Docker images and blockchain data"
-    else
-        log_success "Disk space: ${available_space}GB available"
-    fi
-}
+log_info "Checking Docker Compose..."
+if ! docker compose version &> /dev/null; then
+    echo "❌ Docker Compose v2 not found. Please install it first."
+    exit 1
+fi
+log_success "Docker Compose is installed"
+echo ""
 
-# Check required tools
-check_tools() {
-    log_info "Checking required tools..."
-    
-    # curl
-    if ! command -v curl &> /dev/null; then
-        log_error "curl is not installed"
-        exit 1
-    fi
-    log_success "curl found"
-    
-    # jq (optional but recommended)
-    if ! command -v jq &> /dev/null; then
-        log_warn "jq is not installed (optional, but recommended for JSON parsing)"
-        log_info "Install: sudo apt install jq  (Ubuntu/Debian)"
-    else
-        log_success "jq found"
-    fi
-}
+# Step 2: Create runner directory
+log_step "Step 2: Create Runner Directory"
+RUNNER_DIR="$HOME/actions-runner"
+log_info "Runner will be installed in: $RUNNER_DIR"
 
-# Create necessary directories
-setup_directories() {
-    log_info "Setting up directories..."
-    
-    mkdir -p logs
-    mkdir -p docker/data
-    mkdir -p tests/smoke
-    mkdir -p faucet
-    
-    log_success "Directories created"
-}
+if [ -d "$RUNNER_DIR" ]; then
+    log_info "Directory already exists. Skipping creation."
+else
+    mkdir -p "$RUNNER_DIR"
+    log_success "Created directory: $RUNNER_DIR"
+fi
+echo ""
 
-# Make scripts executable
-setup_permissions() {
-    log_info "Setting script permissions..."
-    
-    chmod +x scripts/*.sh 2>/dev/null || true
-    chmod +x docker/healthchecks/*.sh 2>/dev/null || true
-    chmod +x tests/smoke/*.sh 2>/dev/null || true
-    
-    log_success "Script permissions set"
-}
+# Step 3: Get runner token
+log_step "Step 3: Get GitHub Runner Token"
+echo ""
+echo "You need to add a self-hosted runner to your GitHub repository:"
+echo ""
+echo "1. Go to your repository on GitHub"
+echo "2. Click: Settings → Actions → Runners"
+echo "3. Click: 'New self-hosted runner'"
+echo "4. Select: Linux"
+echo "5. Copy the runner registration token"
+echo ""
+read -p "Have you copied the registration token? (y/n): " confirm
 
-# Pull Docker images
-pull_images() {
-    log_info "Pulling Docker images..."
-    log_info "This may take a few minutes on first run..."
-    
-    if docker compose pull; then
-        log_success "Docker images pulled successfully"
-    else
-        log_error "Failed to pull Docker images"
-        exit 1
-    fi
-}
+if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    echo "Please get the token from GitHub and run this script again"
+    exit 0
+fi
+echo ""
 
-# Main setup
-main() {
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  ZecDev Launchpad - Development Setup"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    
-    check_platform
-    check_docker
-    check_docker_compose
-    check_resources
-    check_tools
-    setup_directories
-    setup_permissions
-    pull_images
-    
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "${GREEN}✓ Development environment setup complete!${NC}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    echo "Next steps:"
-    echo "  1. Start the devnet:  docker compose up -d"
-    echo "  2. Check health:      ./docker/healthchecks/check-zebra.sh"
-    echo "  3. Run smoke tests:   ./tests/smoke/basic-health.sh"
-    echo ""
-    echo "For more information, see README.md"
-    echo ""
-}
+# Step 4: Download runner
+log_step "Step 4: Download GitHub Actions Runner"
+cd "$RUNNER_DIR"
 
-main "$@"
+RUNNER_VERSION="2.311.0"  # Update this to latest version
+RUNNER_URL="https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz"
+
+log_info "Downloading runner v${RUNNER_VERSION}..."
+if curl -o actions-runner-linux-x64.tar.gz -L "$RUNNER_URL"; then
+    log_success "Downloaded successfully"
+else
+    echo "❌ Download failed. Check your internet connection."
+    exit 1
+fi
+
+log_info "Extracting runner..."
+tar xzf ./actions-runner-linux-x64.tar.gz
+log_success "Runner extracted"
+echo ""
+
+# Step 5: Configure runner
+log_step "Step 5: Configure Runner"
+echo ""
+echo "Now paste your registration token when prompted by the config script:"
+echo ""
+
+./config.sh --url https://github.com/YOUR_ORG/YOUR_REPO
+
+log_success "Runner configured!"
+echo ""
+
+# Step 6: Install as service
+log_step "Step 6: Install Runner as Service (Optional)"
+echo ""
+echo "Do you want to install the runner as a service?"
+echo "(This makes it start automatically)"
+echo ""
+read -p "Install as service? (y/n): " install_service
+
+if [[ "$install_service" =~ ^[Yy]$ ]]; then
+    sudo ./svc.sh install
+    sudo ./svc.sh start
+    log_success "Runner installed and started as service"
+else
+    log_info "You can start the runner manually with: ./run.sh"
+fi
+echo ""
+
+# Step 7: Verify installation
+log_step "Step 7: Verification"
+echo ""
+echo "To verify your runner is working:"
+echo "  1. Go to: Settings → Actions → Runners on GitHub"
+echo "  2. You should see your runner listed as 'Idle'"
+echo ""
+log_success "Setup complete!"
+echo ""
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Runner Details:"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Location: $RUNNER_DIR"
+echo "  Start:    cd $RUNNER_DIR && ./run.sh"
+if [[ "$install_service" =~ ^[Yy]$ ]]; then
+    echo "  Status:   sudo ./svc.sh status"
+    echo "  Stop:     sudo ./svc.sh stop"
+fi
+echo ""
+echo "Next: Push to your repo to trigger the smoke-test workflow!"
+echo ""
