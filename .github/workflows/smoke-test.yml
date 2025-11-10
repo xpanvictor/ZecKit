@@ -7,7 +7,7 @@ on:
   pull_request:
     branches:
       - main
-  workflow_dispatch:  # Allow manual triggers
+  workflow_dispatch:  # Allow manual triggers to work on WSL runner
 
 jobs:
   smoke-test:
