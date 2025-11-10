@@ -1,4 +1,4 @@
-# ZecDev Launchpad
+# ZecKit
 
 > A Linux-first toolkit for Zcash development on Zebra
 
@@ -42,7 +42,7 @@
 
 ## Overview
 
-**ZecDev Launchpad** is a developer-first toolkit that provides a fast, reliable, and unified environment for building on Zebra, the new Zcash node implementation replacing zcashd.
+**ZecKit** is a developer-first toolkit that provides a fast, reliable, and unified environment for building on Zebra, the new Zcash node implementation replacing zcashd.
 
 In Milestone 1, we establish the foundation: a containerized Zcash regtest devnet with health monitoring and CI integration.
 
@@ -112,7 +112,7 @@ docker compose down -v
 
 ## Project Goals
 
-ZecDev Launchpad aims to solve the critical gap left by zcashd deprecation:
+ZecKit aims to solve the critical gap left by zcashd deprecation:
 
 1. **Standardize Zebra Development:** One consistent way to run Zebra + light-client backends locally and in CI
 2. **Enable UA-Centric Testing:** Built-in support for Unified Address (ZIP-316) workflows
@@ -124,7 +124,7 @@ ZecDev Launchpad aims to solve the critical gap left by zcashd deprecation:
 - Zcash is migrating from zcashd to Zebra (official deprecation in 2025)
 - Teams lack a standard, maintained devnet + CI setup
 - Fragmented tooling leads to drift, flakiness, and late-discovered bugs
-- ZecDev Launchpad productizes the exact workflow builders need
+- ZecKit productizes the exact workflow builders need
 
 ---
 
@@ -216,7 +216,7 @@ curl -d '{"method":"getinfo","params":[]}' \
 
 ### GitHub Actions Setup
 
-ZecDev Launchpad uses a **self-hosted runner** (recommended on WSL/Linux) for CI.
+ZecKit uses a **self-hosted runner** (recommended on WSL/Linux) for CI.
 
 #### Setup Runner
 

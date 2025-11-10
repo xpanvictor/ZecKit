@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Development environment setup for ZecDev Launchpad
+# Development environment setup for ZecKit
 # Sets up Docker, dependencies, and validates the environment
 set -euo pipefail
 
@@ -46,7 +46,7 @@ check_platform() {
         PLATFORM="wsl"
     else
         log_error "Unsupported platform: ${OSTYPE:-unknown}"
-        log_error "ZecDev Launchpad officially supports Linux. macOS/Windows are best-effort."
+        log_error "ZecKit officially supports Linux. macOS/Windows are best-effort."
         exit 1
     fi
 }
@@ -233,7 +233,7 @@ pull_images() {
 main() {
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  ZecDev Launchpad - Development Setup"
+    echo "  ZecKit - Development Setup"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 

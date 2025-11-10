@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a problem with ZecDev Launchpad
+about: Report a problem with ZecKit
 title: '[BUG] '
 labels: bug
 assignees: ''

@@ -1,6 +1,6 @@
-# Contributing to ZecDev Launchpad
+# Contributing to ZecKit
 
-Thank you for your interest in contributing to ZecDev Launchpad! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to ZecKit! This document provides guidelines and instructions for contributing.
 
 ## Table of Contents
 
@@ -238,4 +238,4 @@ Contributions welcome:
 
 ---
 
-Thank you for contributing to ZecDev Launchpad! 🚀
+Thank you for contributing to ZecKit! 🚀

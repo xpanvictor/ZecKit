@@ -1,4 +1,4 @@
-# ZecDev Launchpad - Main Docker Compose Configuration
+# ZecKit - Main Docker Compose Configuration
 # Milestone 1: Zebra-only devnet setup
 
 services:

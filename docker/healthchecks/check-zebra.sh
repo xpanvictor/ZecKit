@@ -1,5 +1,5 @@
 #!/bin/bash
-# Basic smoke test for ZecDev Launchpad
+# Basic smoke test for ZecKit
 # Verifies that Zebra is functional and can perform basic operations
 
 set -e
@@ -210,7 +210,7 @@ test_peer_info() {
 main() {
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  ZecDev Launchpad - Smoke Test Suite (M1)"
+    echo "  ZecKit - Smoke Test Suite (M1)"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     log_info "RPC Endpoint: $ZEBRA_RPC_URL"
