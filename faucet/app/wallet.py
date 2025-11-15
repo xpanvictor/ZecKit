@@ -76,8 +76,17 @@ class FaucetWallet:
         try:
             logger.info("Creating new faucet wallet")
             
-            # Generate new transparent address
-            self.address = self.zebra_client.get_new_address("transparent")
+            # Try to generate new address from Zebra
+            try:
+                self.address = self.zebra_client.get_new_address("transparent")
+                logger.info(f"✓ Generated new address from Zebra: {self.address}")
+            except Exception as e:
+                logger.warning(f"Could not generate address from Zebra: {e}")
+                logger.info("Using fallback regtest address")
+                # Fallback: Use a known regtest address
+                # This is safe for regtest only - never use in production
+                self.address = "tmBsTi2xWTjUdEXnuTceL7fecEQKeWu4u6d"
+            
             self.created_at = datetime.utcnow().isoformat() + "Z"
             self.transaction_history = []
             
