@@ -1,33 +1,4 @@
-# ZecKit Faucet - Python Dependencies
-# Core Framework
-Flask==3.0.0
-Flask-CORS==4.0.0
-Werkzeug==3.0.1
-
-# HTTP Client for Zebra RPC
-requests==2.31.0
-
-# Configuration Management
-python-dotenv==1.0.0
-
-# Production WSGI Server
+flask==3.0.0
+flask-cors==4.0.0
 gunicorn==21.2.0
-
-# Date/Time handling
-python-dateutil==2.8.2
-
-# JSON handling (builtin json is fine, but this is better)
-orjson==3.9.10
-
-# Logging
-colorlog==6.8.0
-
-# Input validation
-jsonschema==4.20.0
-
-# Rate limiting (simple in-memory)
-# For production, consider Redis-based: Flask-Limiter[redis]
-Flask-Limiter==3.5.0
-
-# Health checks
-py-healthcheck==1.10.1
+requests==2.31.0

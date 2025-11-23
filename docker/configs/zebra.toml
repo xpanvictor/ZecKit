@@ -1,0 +1,62 @@
+# Zebra Configuration for ZecKit
+# Regtest mode for local development and testing
+
+[network]
+# Use Regtest network for local development
+network = "Regtest"
+
+# Listen address for P2P connections (inside container)
+listen_addr = "0.0.0.0:8233"
+
+# Disable external peers (we're running in isolation)
+initial_mainnet_peers = []
+initial_testnet_peers = []
+
+[consensus]
+# Checkpoint verification (disabled for regtest)
+checkpoint_sync = false
+
+[state]
+# Cache directory for blockchain state
+cache_dir = "/var/zebra/state"
+
+[rpc]
+# Enable RPC server
+# SECURITY: In production, use authenticated endpoints and TLS
+# For local development, we bind to all interfaces inside the container
+# but the host only exposes to localhost via Docker port mapping
+listen_addr = "0.0.0.0:8232"
+
+# Allow all RPC methods for development
+# In production, restrict this list
+# parallel_cpu_threads = 1
+
+[tracing]
+# Logging configuration
+# Options: error, warn, info, debug, trace
+filter = "info,zebrad=debug"
+
+# Output format (json for structured logs, or pretty for human-readable)
+# Use "json" for production/CI, "pretty" for local development
+use_color = true
+force_use_color = false
+
+# Flamegraph profiling (disabled by default)
+flamegraph = "Off"
+
+[mempool]
+# Enable mempool for transaction testing
+# eviction_memory_time = "1h"
+# tx_cost_limit = 80000000
+
+[mining]
+# Mining configuration for regtest
+# This allows block generation via RPC
+# miner_address = "t27eWDgjFYJGVXmzrXeVjnb5J3uXDM9xH9v"  # Optional: will be set dynamically
+
+# Allow mining through RPC even without miner_address
+# internal_miner = false
+
+[metrics]
+# Disable Prometheus metrics for M1 (can enable in future)
+# endpoint_addr = "0.0.0.0:9999"

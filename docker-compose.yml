@@ -1,148 +1,112 @@
-# ZecKit - Main Docker Compose Configuration
-# Milestone 2: Zebra + Faucet + Lightwalletd
+version: '3.8'
 
 services:
+  # ============================================
+  # ZEBRA - Full Node (Regtest)
+  # ============================================
   zebra:
-    # Using official Zebra image from Zcash Foundation
-    image: zfnd/zebra:1.9.0
-    container_name: zecdev-zebra
-    
-    networks:
-      - zecdev
-    
-    # Port mappings (localhost only for security)
+    image: zfnd/zebra:1.10.0
+    container_name: zeckit-zebra
     ports:
-      - "127.0.0.1:8232:8232"  # RPC
-      - "127.0.0.1:8233:8233"  # P2P
-    
-    # Mount configuration and persistent state
+      - "127.0.0.1:8232:8232"  # RPC port
     volumes:
-      - zebra-data:/var/zebra/state
       - ./docker/configs/zebra.toml:/etc/zebrad/zebrad.toml:ro
-    
-    # Environment variables
+      - zebra-data:/var/zebra
     environment:
-      - NETWORK=Regtest
-      - RUST_LOG=info,zebrad=debug
-      - RUST_BACKTRACE=1
-    
-    # Health check to ensure Zebra is ready
+      - ZEBRA_CONF_PATH=/etc/zebrad/zebrad.toml
+    command: ["start"]
     healthcheck:
-      test: |
-        curl -sf --max-time 5 \
-          --data-binary '{"jsonrpc":"2.0","id":"healthcheck","method":"getinfo","params":[]}' \
-          -H 'content-type: application/json' \
-          http://localhost:8232/ > /dev/null || exit 1
+      test: ["CMD", "curl", "-f", "http://localhost:8232"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
-    
-    # Restart policy
-    restart: unless-stopped
-    
-    # Resource limits
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-        reservations:
-          memory: 2G
+    networks:
+      - zeckit-network
 
+  # ============================================
+  # LIGHTWALLETD - Backend
+  # ============================================
+  lightwalletd:
+    image: electriccoinco/lightwalletd:latest
+    container_name: zeckit-lightwalletd
+    ports:
+      - "127.0.0.1:9067:9067"
+    depends_on:
+      zebra:
+        condition: service_healthy
+    command: [
+      "--grpc-bind-addr=0.0.0.0:9067",
+      "--zcash-conf-path=/etc/lightwalletd/zcash.conf",
+      "--log-file=/dev/stdout",
+      "--log-level=7",
+      "--no-tls-very-insecure=true"
+    ]
+    volumes:
+      - lightwalletd-data:/var/lib/lightwalletd
+      - ./docker/configs/zcash.conf:/etc/lightwalletd/zcash.conf:ro
+    networks:
+      - zeckit-network
+    profiles:
+      - lwd
+
+  # ============================================
+  # ZINGO WALLET - REAL Wallet (ZingoLib)
+  # ============================================
+  zingo-wallet:
+    build:
+      context: ./docker/zingo
+      dockerfile: Dockerfile
+    container_name: zeckit-zingo-wallet
+    volumes:
+      - zingo-data:/var/zingo
+    depends_on:
+      zebra:
+        condition: service_healthy
+      lightwalletd:
+        condition: service_started
+    environment:
+      - ZINGO_DATA_DIR=/var/zingo
+      - LIGHTWALLETD_URI=http://lightwalletd:9067
+    networks:
+      - zeckit-network
+    profiles:
+      - lwd
+
+  # ============================================
+  # FAUCET - Python API calling Zingo-CLI
+  # ============================================
   faucet:
     build:
       context: ./faucet
       dockerfile: Dockerfile
-    container_name: zecdev-faucet
-    
-    networks:
-      - zecdev
-    
-    # Port mappings
+    container_name: zeckit-faucet
     ports:
-      - "127.0.0.1:8080:8080"  # Faucet API
-    
-    # Environment variables
-    environment:
-      - ZEBRA_RPC_URL=http://zebra:8232
-      - FLASK_ENV=development
-      - LOG_LEVEL=DEBUG
-      - FAUCET_AMOUNT_DEFAULT=10.0
-      - FAUCET_AMOUNT_MIN=1.0
-      - FAUCET_AMOUNT_MAX=100.0
-      - RATE_LIMIT_ENABLED=true
-      - RATE_LIMIT_REQUESTS=10
-      - RATE_LIMIT_WINDOW=3600
-    
-    # Volume for wallet persistence
+      - "127.0.0.1:8080:8080"
     volumes:
-      - faucet-data:/var/faucet
-    
-    # Wait for Zebra to be healthy
+      - ./faucet/app:/app
+      - zingo-data:/var/zingo:ro
     depends_on:
       zebra:
         condition: service_healthy
-    
-    # Health check
+      zingo-wallet:
+        condition: service_started
+    environment:
+      - LIGHTWALLETD_URI=http://lightwalletd:9067
+      - ZINGO_WALLET_PATH=/var/zingo/zingo-wallet.dat
+      - ZINGO_CLI_PATH=/usr/local/bin/zingo-cli
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 15s
+      interval: 10s
       timeout: 5s
-      retries: 3
-      start_period: 20s
-    
-    # Restart policy
-    restart: unless-stopped
-
-  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  # Lightwalletd Backend (start with: docker compose --profile lwd up -d)
-  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  lightwalletd:
-    image: electriccoinco/lightwalletd:v0.4.18
-    container_name: zecdev-lightwalletd
-    
+      retries: 5
     networks:
-      - zecdev
-    
-    # Port mappings
-    ports:
-      - "127.0.0.1:9067:9067"  # gRPC
-    
-    # Command with proper flags pointing to Zebra
-    command:
-      - "--grpc-bind-addr=0.0.0.0:9067"
-      - "--zcash-conf-path=/etc/lightwalletd/zcash.conf"
-      - "--no-tls-very-insecure"
-      - "--log-level=4"
-      - "--data-dir=/var/lib/lightwalletd"
-    
-    # Volume for lightwalletd data and config
-    volumes:
-      - lightwalletd-data:/var/lib/lightwalletd
-      - ./docker/configs/zcash.conf:/etc/lightwalletd/zcash.conf:ro
-    
-    # Wait for Zebra
-    depends_on:
-      zebra:
-        condition: service_healthy
-    
-    # Restart policy
-    restart: unless-stopped
-    
-    # Only start when explicitly requested
-    profiles:
-      - lwd
+      - zeckit-network
 
 networks:
-  zecdev:
+  zeckit-network:
     driver: bridge
-    name: zecdev-network
 
 volumes:
   zebra-data:
-    name: zecdev-zebra-data
-  faucet-data:
-    name: zecdev-faucet-data
+  zingo-data:
   lightwalletd-data:
-    name: zecdev-lightwalletd-data
