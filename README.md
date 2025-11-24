@@ -338,49 +338,6 @@ docker volume rm zeckit_zebra-data
 
 ---
 
-## Development
-
-### Repository Structure
-
-```
-ZecKit/
-├── cli/               # Rust CLI tool
-│   ├── src/
-│   │   ├── commands/  # up/down/test/status
-│   │   └── docker/    # Docker Compose wrapper
-│   └── Cargo.toml
-├── faucet/            # Python faucet service
-│   ├── app/
-│   │   ├── routes/    # API endpoints
-│   │   └── services/  # Wallet integration
-│   └── Dockerfile
-├── docker/
-│   ├── zebra/         # Custom Zebra build
-│   ├── zingo/         # Zingo wallet container
-│   └── configs/       # Configuration files
-├── fixtures/          # UA test fixtures
-├── specs/             # Technical documentation
-└── docker-compose.yml
-```
-
-### Build from Source
-
-```bash
-# Build CLI
-cd cli
-cargo build --release
-
-# Build Docker images
-docker compose --profile lwd build
-
-# Run development faucet
-cd faucet
-pip install -r requirements.txt
-python -m app.main
-```
-
----
-
 ## Documentation
 
 - **[Architecture](specs/architecture.md)** - System design
