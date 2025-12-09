@@ -29,6 +29,7 @@ flamegraph = "Off"
 [mining]
 # INTERNAL MINER - Automatically mines blocks in regtest
 internal_miner = true
-miner_address = "tmNJkLNn1uRTUqsUrQeYE1bxzUGw79bkmiW"
+miner_address = "tmTCghvZEYEEHvccMN55PYhsUDec3nPF9YM"
+
 [metrics]
 # Disable Prometheus metrics

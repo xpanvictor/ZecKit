@@ -1,55 +1,31 @@
-# ========================================
-# Builder Stage
-# ========================================
-FROM rust:1.85-slim-bookworm as builder
+# docker/zingo-wallet/Dockerfile
+FROM rust:1.85-slim-bookworm
 
 RUN apt-get update && apt-get install -y \
-    git \
-    pkg-config \
-    libssl-dev \
-    protobuf-compiler \
     build-essential \
-    libclang-dev \
-    clang \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-
-# Clone YOUR fork with the fix
-RUN git clone https://github.com/Timi16/zaino.git
-
-WORKDIR /build/zaino
-
-# Checkout your fix branch
-RUN git checkout fix/regtest-insecure-grpc
-
-# Build with NO_TLS flag
-RUN cargo build --release --bin zainod --features no_tls_use_unencrypted_traffic
-
-# ========================================
-# Runtime Stage
-# ========================================
-FROM debian:bookworm-slim
-
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    libssl3 \
+    gcc \
+    protobuf-compiler \
+    libssl-dev \
     curl \
+    git \
     netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -u 2002 -s /bin/bash zaino
+# Clone OFFICIAL zingolib dev branch with the latest fixes
+WORKDIR /build
+RUN git clone https://github.com/zingolabs/zingolib.git && \
+    cd zingolib && \
+    git checkout dev && \
+    rustup set profile minimal && \
+    cargo build --release --package zingo-cli && \
+    mv target/release/zingo-cli /usr/local/bin/ && \
+    chmod +x /usr/local/bin/zingo-cli
 
-COPY --from=builder /build/zaino/target/release/zainod /usr/local/bin/zainod
-RUN chmod +x /usr/local/bin/zainod
+RUN mkdir -p /var/zingo && chmod 777 /var/zingo
+
+WORKDIR /var/zingo
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-
-RUN mkdir -p /var/zaino && chown -R zaino:zaino /var/zaino
-
-WORKDIR /var/zaino
-
-USER zaino
 
 ENTRYPOINT ["/entrypoint.sh"]
