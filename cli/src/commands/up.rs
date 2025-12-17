@@ -7,9 +7,10 @@ use reqwest::Client;
 use serde_json::json;
 use std::process::Command;
 use std::fs;
+use std::io::{self, Write};
 use tokio::time::{sleep, Duration};
 
-const MAX_WAIT_SECONDS: u64 = 10000;
+const MAX_WAIT_SECONDS: u64 = 30000;
 
 pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan());
@@ -20,7 +21,7 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     let compose = DockerCompose::new()?;
     
     if fresh {
-        println!("{}", "🧹 Cleaning up old data...".yellow());
+        println!("{}", "Cleaning up old data...".yellow());
         compose.down(true)?;
     }
     
@@ -36,18 +37,38 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
         }
     };
     
-    println!("{} Starting services: {}", "".green(), services.join(", "));
+    println!("Starting services: {}", services.join(", "));
+    println!();
     
-    // Build and start services
+    // Build and start services with progress
     if backend == "lwd" {
-        println!("{} Building Docker images (first run may take a few minutes)...", "🔨".cyan());
+        println!("Building Docker images...");
+        println!();
+        
+        println!("[1/4] Building Zebra...");
+        println!("[2/4] Building Lightwalletd...");
+        println!("[3/4] Building Zingo Wallet...");
+        println!("[4/4] Building Faucet...");
+        
         compose.up_with_profile("lwd")?;
+        println!();
     } else if backend == "zaino" {
-        println!("{} Building Docker images (first run may take a few minutes)...", "🔨".cyan());
+        println!("Building Docker images...");
+        println!();
+        
+        println!("[1/4] Building Zebra...");
+        println!("[2/4] Building Zaino...");
+        println!("[3/4] Building Zingo Wallet...");
+        println!("[4/4] Building Faucet...");
+        
         compose.up_with_profile("zaino")?;
+        println!();
     } else {
         compose.up(&services)?;
     }
+    
+    println!("Starting services...");
+    println!();
     
     let pb = ProgressBar::new_spinner();
     pb.set_style(
@@ -56,21 +77,57 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
             .unwrap()
     );
     
-    pb.set_message("⏳ Waiting for Zebra...");
+    // [1/4] Zebra with percentage
     let checker = HealthChecker::new();
-    checker.wait_for_zebra(&pb).await?;
+    let start = std::time::Instant::now();
     
-    pb.set_message("⏳ Waiting for Faucet...");
-    checker.wait_for_faucet(&pb).await?;
+    loop {
+        pb.tick();
+        
+        if checker.wait_for_zebra(&pb).await.is_ok() {
+            println!("[1/4] Zebra ready (100%)");
+            break;
+        }
+        
+        let elapsed = start.elapsed().as_secs();
+        if elapsed < 120 {
+            let progress = (elapsed as f64 / 120.0 * 100.0).min(99.0) as u32;
+            print!("\r[1/4] Starting Zebra... {}%", progress);
+            io::stdout().flush().ok();
+            sleep(Duration::from_secs(1)).await;
+        } else {
+            return Err(ZecDevError::ServiceNotReady("Zebra not ready".into()));
+        }
+    }
+    println!();
     
+    // [2/4] Backend with percentage
     if backend == "lwd" || backend == "zaino" {
         let backend_name = if backend == "lwd" { "Lightwalletd" } else { "Zaino" };
-        pb.set_message(format!("⏳ Waiting for {}...", backend_name));
-        checker.wait_for_backend(&backend, &pb).await?;
+        let start = std::time::Instant::now();
+        
+        loop {
+            pb.tick();
+            
+            if checker.wait_for_backend(&backend, &pb).await.is_ok() {
+                println!("[2/4] {} ready (100%)", backend_name);
+                break;
+            }
+            
+            let elapsed = start.elapsed().as_secs();
+            if elapsed < 180 {
+                let progress = (elapsed as f64 / 180.0 * 100.0).min(99.0) as u32;
+                print!("\r[2/4] Starting {}... {}%", backend_name, progress);
+                io::stdout().flush().ok();
+                sleep(Duration::from_secs(1)).await;
+            } else {
+                return Err(ZecDevError::ServiceNotReady(format!("{} not ready", backend_name)));
+            }
+        }
+        println!();
     }
     
-    pb.finish_with_message("✓ Services starting...".green().to_string());
-    
+    // [3/4] Wallet with percentage
     let backend_uri = if backend == "lwd" {
         "http://lightwalletd:9067"
     } else if backend == "zaino" {
@@ -79,35 +136,73 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
         "http://lightwalletd:9067"
     };
     
-    // WAIT FOR WALLET FIRST (before mining!)
+    let start = std::time::Instant::now();
+    loop {
+        pb.tick();
+        
+        if wait_for_wallet_ready(&pb, backend_uri).await.is_ok() {
+            println!("[3/4] Zingo Wallet ready (100%)");
+            break;
+        }
+        
+        let elapsed = start.elapsed().as_secs();
+        if elapsed < 60 {
+            let progress = (elapsed as f64 / 60.0 * 100.0).min(99.0) as u32;
+            print!("\r[3/4] Starting Zingo Wallet... {}%", progress);
+            io::stdout().flush().ok();
+            sleep(Duration::from_secs(1)).await;
+        } else {
+            return Err(ZecDevError::ServiceNotReady("Wallet not ready".into()));
+        }
+    }
     println!();
-    println!("{} Waiting for wallet to initialize...", "⏳".cyan());
-    pb.set_message("⏳ Wallet starting...");
-    wait_for_wallet_ready(&pb, backend_uri).await?;
-    pb.finish_with_message("✓ Wallet ready".green().to_string());
+    
+    // [4/4] Faucet with percentage
+    let start = std::time::Instant::now();
+    loop {
+        pb.tick();
+        
+        if checker.wait_for_faucet(&pb).await.is_ok() {
+            println!("[4/4] Faucet ready (100%)");
+            break;
+        }
+        
+        let elapsed = start.elapsed().as_secs();
+        if elapsed < 60 {
+            let progress = (elapsed as f64 / 60.0 * 100.0).min(99.0) as u32;
+            print!("\r[4/4] Starting Faucet... {}%", progress);
+            io::stdout().flush().ok();
+            sleep(Duration::from_secs(1)).await;
+        } else {
+            return Err(ZecDevError::ServiceNotReady("Faucet not ready".into()));
+        }
+    }
+    println!();
+    
+    pb.finish_and_clear();
     
     // GET WALLET ADDRESS AND UPDATE ZEBRA CONFIG
     println!();
-    println!("{} Configuring Zebra to mine to wallet...", "⚙️".cyan());
+    println!("Configuring Zebra to mine to wallet...");
     
     match get_wallet_transparent_address(backend_uri).await {
         Ok(t_address) => {
-            println!("{} Wallet transparent address: {}", "✓".green(), t_address);
+            println!("Wallet transparent address: {}", t_address);
             
             if let Err(e) = update_zebra_miner_address(&t_address) {
-                println!("{} Warning: Could not update zebra.toml: {}", "⚠️".yellow(), e);
+                println!("{}", format!("Warning: Could not update zebra.toml: {}", e).yellow());
             } else {
-                println!("{} Updated zebra.toml miner_address", "✓".green());
+                println!("Updated zebra.toml miner_address");
                 
-                println!("{} Restarting Zebra with new miner address...", "🔄".yellow());
+                println!("Restarting Zebra with new miner address...");
                 if let Err(e) = restart_zebra().await {
-                    println!("{} Warning: Zebra restart had issues: {}", "⚠️".yellow(), e);
+                    println!("{}", format!("Warning: Zebra restart had issues: {}", e).yellow());
                 }
             }
         }
         Err(e) => {
-            println!("{} Warning: Could not get wallet address: {}", "⚠️".yellow(), e);
-            println!("   {} Mining will use default address in zebra.toml", "→".yellow());
+            println!("{}", format!("Warning: Could not get wallet address: {}", e).yellow());
+            println!("  Mining will use default address in zebra.toml");
         }
     }
     
@@ -116,45 +211,45 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     
     // Wait extra time for coinbase maturity
     println!();
-    println!("{} Waiting for coinbase maturity (100 confirmations)...", "⏳".yellow());
+    println!("Waiting for coinbase maturity (100 confirmations)...");
     sleep(Duration::from_secs(120)).await;
     
     // Generate UA fixtures
     println!();
-    println!("{} Generating ZIP-316 Unified Address fixtures...", "📋".cyan());
+    println!("Generating ZIP-316 Unified Address fixtures...");
     
     match generate_ua_fixtures(backend_uri).await {
         Ok(address) => {
-            println!("{} Generated UA: {}...", "✓".green(), &address[..20]);
+            println!("Generated UA: {}...", &address[..20]);
         }
         Err(e) => {
-            println!("{} Warning: Could not generate UA fixture ({})", "⚠️".yellow(), e);
-            println!("   {} You can manually update fixtures/unified-addresses.json", "→".yellow());
+            println!("{}", format!("Warning: Could not generate UA fixture ({})", e).yellow());
+            println!("  You can manually update fixtures/unified-addresses.json");
         }
     }
     
     // Sync wallet
     println!();
-    println!("{} Syncing wallet with blockchain...", "🔄".cyan());
+    println!("Syncing wallet with blockchain...");
     if let Err(e) = sync_wallet(backend_uri).await {
-        println!("{} Wallet sync warning: {}", "⚠️".yellow(), e);
+        println!("{}", format!("Wallet sync warning: {}", e).yellow());
     } else {
-        println!("{} Wallet synced with blockchain", "✓".green());
+        println!("Wallet synced with blockchain");
     }
     
     // Check balance
     println!();
-    println!("{} Checking wallet balance...", "💰".cyan());
+    println!("Checking wallet balance...");
     match check_wallet_balance().await {
         Ok(balance) if balance > 0.0 => {
-            println!("{} Wallet has {} ZEC available", "✓".green(), balance);
+            println!("Wallet has {} ZEC available", balance);
         }
         Ok(_) => {
-            println!("{} Wallet synced but balance not yet available", "⚠️".yellow());
-            println!("   {} Blocks still maturing, wait a few more minutes", "→".yellow());
+            println!("{}", "Wallet synced but balance not yet available".yellow());
+            println!("  Blocks still maturing, wait a few more minutes");
         }
         Err(e) => {
-            println!("{} Could not check balance: {}", "⚠️".yellow(), e);
+            println!("{}", format!("Could not check balance: {}", e).yellow());
         }
     }
     
@@ -198,20 +293,19 @@ async fn wait_for_mined_blocks(pb: &ProgressBar, min_blocks: u64) -> Result<()> 
     let client = Client::new();
     let start = std::time::Instant::now();
     
+    println!("Mining blocks to maturity...");
+    
     loop {
-        pb.tick();
-        
         match get_block_count(&client).await {
             Ok(height) if height >= min_blocks => {
+                println!("Mined {} blocks (coinbase maturity reached)", height);
                 println!();
-                println!("{} Mined {} blocks (coinbase maturity reached)", "✓".green(), height);
                 return Ok(());
             }
             Ok(height) => {
-                pb.set_message(format!(
-                    "⛏️  Internal miner generating blocks... ({}/{})", 
-                    height, min_blocks
-                ));
+                let progress = (height as f64 / min_blocks as f64 * 100.0) as u64;
+                print!("\r  Block {} / {} ({}%)", height, min_blocks, progress);
+                io::stdout().flush().ok();
             }
             Err(_) => {}
         }
@@ -401,10 +495,10 @@ async fn print_mining_info() -> Result<()> {
         println!("{}", "  Blockchain Status".cyan().bold());
         println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan());
         println!();
-        println!("  {} {}", "Block Height:".bold(), height);
-        println!("  {} {}", "Network:".bold(), "Regtest");
-        println!("  {} {}", "Mining:".bold(), "Active (internal miner)");
-        println!("  {} {}", "Pre-mined Funds:".bold(), "Available ✓");
+        println!("  Block Height: {}", height);
+        println!("  Network: Regtest");
+        println!("  Mining: Active (internal miner)");
+        println!("  Pre-mined Funds: Available");
     }
     
     Ok(())
@@ -416,17 +510,17 @@ fn print_connection_info(backend: &str) {
     println!("{}", "  Services Ready".cyan().bold());
     println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan());
     println!();
-    println!("  {} {}", "Zebra RPC:".bold(), "http://127.0.0.1:8232");
-    println!("  {} {}", "Faucet API:".bold(), "http://127.0.0.1:8080");
+    println!("  Zebra RPC: http://127.0.0.1:8232");
+    println!("  Faucet API: http://127.0.0.1:8080");
     
     if backend == "lwd" {
-        println!("  {} {}", "LightwalletD:".bold(), "http://127.0.0.1:9067");
+        println!("  LightwalletD: http://127.0.0.1:9067");
     } else if backend == "zaino" {
-        println!("  {} {}", "Zaino:".bold(), "http://127.0.0.1:9067");
+        println!("  Zaino: http://127.0.0.1:9067");
     }
     
     println!();
-    println!("{}", "Next steps:".bold());
+    println!("Next steps:");
     println!("  • Run tests: zecdev test");
     println!("  • View fixtures: cat fixtures/unified-addresses.json");
     println!();
