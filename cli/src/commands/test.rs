@@ -191,24 +191,39 @@ async fn test_wallet_shield() -> Result<()> {
     let backend_uri = detect_backend()?;
     println!("    Detecting backend: {}", backend_uri);
     
-    // Step 2: Sync wallet first
-    println!("    Syncing wallet...");
-    let sync_cmd = format!(
-        "bash -c \"echo -e 'sync run\\nquit' | zingo-cli --data-dir /var/zingo --server {} --chain regtest 2>&1\"",
-        backend_uri
-    );
+    // Step 2: Wait for existing sync to complete before checking balance
+    println!("    Waiting for wallet to sync with blockchain...");
     
-    let sync_output = Command::new("docker")
-        .args(&["exec", "-i", "zeckit-zingo-wallet", "bash", "-c", &sync_cmd])
-        .output();
+    let mut wait_attempts = 0;
+    let max_wait = 120; // Wait up to 2 minutes for wallet to sync
     
-    if let Ok(output) = sync_output {
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        if output_str.contains("Sync completed") {
-            println!("    Sync completed");
-        } else if output_str.contains("already running") {
-            println!("    Sync already running");
+    loop {
+        let balance_cmd = format!(
+            "bash -c \"echo -e 'balance\\nquit' | zingo-cli --data-dir /var/zingo --server {} --chain regtest --nosync 2>&1\"",
+            backend_uri
+        );
+        
+        let output = Command::new("docker")
+            .args(&["exec", "zeckit-zingo-wallet", "bash", "-c", &balance_cmd])
+            .output();
+        
+        if let Ok(out) = output {
+            let output_str = String::from_utf8_lossy(&out.stdout);
+            // Check if we got a valid balance response (not a sync error)
+            if (output_str.contains("confirmed_transparent_balance") || output_str.contains("confirmed_orchard_balance")) 
+                && !output_str.contains("sync is already running") {
+                println!("    Wallet synced, balance available");
+                break;
+            }
         }
+        
+        wait_attempts += 1;
+        if wait_attempts >= max_wait {
+            println!("    Wallet sync timeout ({}s) - proceeding with balance check", max_wait);
+            break;
+        }
+        
+        sleep(Duration::from_secs(1)).await;
     }
     
     sleep(Duration::from_secs(3)).await;
@@ -248,7 +263,7 @@ async fn test_wallet_shield() -> Result<()> {
                         let txid_part = &line[txid_start+1..];
                         if let Some(txid_end) = txid_part.find('"') {
                             let txid = &txid_part[..txid_end];
-                            println!("    TXID: {}...", &txid[..16]);
+                            println!("    TXID: {}...", &txid[..16.min(txid.len())]);
                         }
                     }
                 }
@@ -256,15 +271,11 @@ async fn test_wallet_shield() -> Result<()> {
             
             // Wait for transaction to be mined
             println!("    Waiting for transaction to confirm...");
-            sleep(Duration::from_secs(15)).await;
+            sleep(Duration::from_secs(30)).await;
             
-            // Sync wallet again to see new balance
-            println!("    Syncing wallet to check new balance...");
-            let _ = Command::new("docker")
-                .args(&["exec", "-i", "zeckit-zingo-wallet", "bash", "-c", &sync_cmd])
-                .output();
-            
-            sleep(Duration::from_secs(3)).await;
+            // Wait for wallet to sync the new block
+            println!("    Waiting for wallet to sync new blocks...");
+            sleep(Duration::from_secs(5)).await;
             
             // Check balance AFTER shielding
             let (transparent_after, orchard_after) = get_wallet_balance(&backend_uri)?;
