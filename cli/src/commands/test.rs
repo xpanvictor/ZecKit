@@ -191,51 +191,15 @@ async fn test_wallet_shield() -> Result<()> {
     let backend_uri = detect_backend()?;
     println!("    Detecting backend: {}", backend_uri);
     
-    // Step 2: Wait for existing sync to complete before checking balance
-    println!("    Waiting for wallet to sync with blockchain...");
+    // Step 2: Wait for wallet balance to actually appear (with retries)
+    println!("    Waiting for wallet to receive funds...");
     
-    let mut wait_attempts = 0;
-    let max_wait = 120; // Wait up to 2 minutes for wallet to sync
-    
-    loop {
-        let balance_cmd = format!(
-            "bash -c \"echo -e 'balance\\nquit' | zingo-cli --data-dir /var/zingo --server {} --chain regtest --nosync 2>&1\"",
-            backend_uri
-        );
-        
-        let output = Command::new("docker")
-            .args(&["exec", "zeckit-zingo-wallet", "bash", "-c", &balance_cmd])
-            .output();
-        
-        if let Ok(out) = output {
-            let output_str = String::from_utf8_lossy(&out.stdout);
-            // Check if we got a valid balance response (not a sync error)
-            if (output_str.contains("confirmed_transparent_balance") || output_str.contains("confirmed_orchard_balance")) 
-                && !output_str.contains("sync is already running") {
-                println!("    Wallet synced, balance available");
-                break;
-            }
-        }
-        
-        wait_attempts += 1;
-        if wait_attempts >= max_wait {
-            println!("    Wallet sync timeout ({}s) - proceeding with balance check", max_wait);
-            break;
-        }
-        
-        sleep(Duration::from_secs(1)).await;
-    }
-    
-    sleep(Duration::from_secs(3)).await;
-    
-    // Step 3: Check balance BEFORE shielding
-    println!("    Checking balance before shield...");
-    let (transparent_before, orchard_before) = get_wallet_balance(&backend_uri)?;
+    let (transparent_before, orchard_before) = wait_for_wallet_balance(&backend_uri).await?;
     
     println!("    Transparent: {} ZEC", transparent_before);
     println!("    Orchard: {} ZEC", orchard_before);
     
-    // Step 4: If we have transparent funds >= 1 ZEC, SHIELD IT!
+    // Step 3: If we have transparent funds >= 1 ZEC, SHIELD IT!
     if transparent_before >= 1.0 {
         println!("    Shielding {} ZEC to Orchard...", transparent_before);
         
@@ -334,6 +298,35 @@ async fn test_wallet_shield() -> Result<()> {
         println!();
         print!("  [5/5] Wallet balance and shield... ");
         return Ok(());
+    }
+}
+
+/// Wait for wallet to actually have a balance (with multiple retries)
+/// The background sync in zingo-cli can take time to update the local cache
+async fn wait_for_wallet_balance(backend_uri: &str) -> Result<(f64, f64)> {
+    let mut attempts = 0;
+    let max_attempts = 180; // 3 minutes of retrying
+    
+    loop {
+        let (transparent, orchard) = get_wallet_balance(backend_uri)?;
+        
+        // If we have ANY balance, return it
+        if transparent > 0.0 || orchard > 0.0 {
+            println!("    Balance synced after {} seconds", attempts);
+            return Ok((transparent, orchard));
+        }
+        
+        attempts += 1;
+        if attempts >= max_attempts {
+            println!("    Timeout waiting for balance ({}s) - balance still 0", max_attempts);
+            return Ok((0.0, 0.0));
+        }
+        
+        if attempts % 10 == 0 {
+            print!(".");
+        }
+        
+        sleep(Duration::from_secs(1)).await;
     }
 }
 
