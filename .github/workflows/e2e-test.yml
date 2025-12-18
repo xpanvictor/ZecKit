@@ -13,7 +13,7 @@ on:
 
 jobs:
   e2e-tests:
-    name: ZecKit E2E Test Suite
+    name: ZecKit E2E Tests Suite
     runs-on: self-hosted
     timeout-minutes: 30
     
