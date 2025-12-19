@@ -9,15 +9,14 @@ on:
     branches:
       - main
       - develop
-  workflow_dispatch:  # Allow manual triggers
+  workflow_dispatch:
 
 jobs:
   e2e-tests:
     name: ZecKit E2E Test Suite
-    runs-on: self-hosted  # Runs on your Mac
+    runs-on: self-hosted
     
-    # Timeout after 3 hours (full build + devnet + tests)
-    timeout-minutes: 180
+    timeout-minutes: 60  # 1 hour
     
     steps:
       - name: Checkout code
@@ -63,9 +62,7 @@ jobs:
       - name: Clean up previous runs
         run: |
           echo "Cleaning up from previous runs..."
-          docker compose down -v --remove-orphans 2>/dev/null || true
-          docker system prune -f --volumes 2>/dev/null || true
-          rm -rf /var/zaino /var/zingo /var/faucet_wallet 2>/dev/null || true
+          docker compose down --remove-orphans 2>/dev/null || true
           echo "✓ Cleanup complete"
           echo ""
       
@@ -84,28 +81,26 @@ jobs:
       - name: Start devnet with zaino backend
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "  Starting ZecKit Devnet"
+          echo "  Starting ZecKit Devnet (Using Existing Images)"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
-          echo "⏱️  This will take 1-2 hours (building Docker images from scratch)..."
-          echo ""
           
-          # macOS-compatible timeout using background process
-          ./cli/target/release/zecdev up --backend zaino --fresh &
+          # NO --fresh flag - reuse existing images!
+          ./cli/target/release/zecdev up --backend zaino &
           PID=$!
           
           SECONDS=0
-          MAX_SECONDS=10800  # 3 hours
+          MAX_SECONDS=3600  # 1 hour
           
-          # Show progress every minute
+          # Show progress every 30 seconds
           while kill -0 $PID 2>/dev/null && [ $SECONDS -lt $MAX_SECONDS ]; do
-            sleep 60
+            sleep 30
             ELAPSED_MIN=$((SECONDS / 60))
-            echo "⏱️  Still building... ($ELAPSED_MIN minutes elapsed)"
+            echo "⏱️  Starting devnet... ($ELAPSED_MIN minutes elapsed)"
           done
           
           if kill -0 $PID 2>/dev/null; then
-            echo "✗ Devnet startup timed out after 3 hours"
+            echo "✗ Devnet startup timed out after 1 hour"
             kill $PID 2>/dev/null || true
             echo ""
             echo "Container logs:"
@@ -134,7 +129,6 @@ jobs:
           echo "  Verifying Services"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          # Check Zebra RPC
           echo "Checking Zebra RPC..."
           for i in {1..30}; do
             if curl -sf --max-time 5 \
@@ -151,7 +145,6 @@ jobs:
             sleep 2
           done
           
-          # Check Zaino gRPC
           echo "Checking Zaino..."
           if docker exec zeckit-zaino zindexer --version > /dev/null 2>&1; then
             echo "✓ Zaino OK"
@@ -160,7 +153,6 @@ jobs:
             exit 1
           fi
           
-          # Check Faucet
           echo "Checking Faucet..."
           for i in {1..15}; do
             if curl -sf http://127.0.0.1:8080/health | grep -q "OK"; then
@@ -174,7 +166,6 @@ jobs:
             sleep 2
           done
           
-          # Check Zingo Wallet
           echo "Checking Zingo Wallet..."
           if docker exec zeckit-zingo-wallet bash -c "echo -e 'quit' | zingo-cli --data-dir /var/zingo --server http://zaino:9067 --chain regtest --nosync" > /dev/null 2>&1; then
             echo "✓ Zingo Wallet OK"
@@ -215,9 +206,7 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
           
-          echo "Wallet balance:"
           docker exec zeckit-zingo-wallet bash -c "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo --server http://zaino:9067 --chain regtest --nosync" 2>/dev/null || echo "Could not retrieve balance"
-          
           echo ""
       
       - name: Check faucet status
@@ -228,9 +217,7 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
           
-          echo "Faucet stats:"
           curl -s http://127.0.0.1:8080/stats | jq . || echo "Could not get faucet stats"
-          
           echo ""
       
       - name: Collect logs
@@ -243,7 +230,6 @@ jobs:
           docker compose logs zaino > logs/zaino.log 2>&1 || true
           docker compose logs zingo-wallet-zaino > logs/zingo-wallet.log 2>&1 || true
           docker compose logs faucet-zaino > logs/faucet.log 2>&1 || true
-          
           docker ps -a > logs/containers.log 2>&1 || true
           docker network ls > logs/networks.log 2>&1 || true
           
@@ -265,11 +251,8 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
           
-          echo "Tearing down devnet..."
-          docker compose down -v 2>/dev/null || true
-          
-          echo "Final cleanup..."
-          docker system prune -f --volumes 2>/dev/null || true
+          echo "Stopping containers (keeping images for next run)..."
+          docker compose down --remove-orphans 2>/dev/null || true
           
           echo "✓ Cleanup complete"
           echo ""
@@ -289,7 +272,7 @@ jobs:
             echo "Completed checks:"
             echo "  ✓ Docker Desktop started"
             echo "  ✓ CLI binary built"
-            echo "  ✓ Devnet started (Zebra + Zaino + Zingo + Faucet)"
+            echo "  ✓ Devnet started (using existing images)"
             echo "  ✓ All services healthy"
             echo "  ✓ Smoke tests passed"
             echo "  ✓ Wallet synced"
@@ -301,12 +284,6 @@ jobs:
             echo ""
             echo "Check the logs above for details"
             echo "Artifact logs: e2e-test-logs-${{ github.run_number }}"
-            echo ""
-            echo "Common issues:"
-            echo "  - Docker Desktop not running"
-            echo "  - Insufficient disk space"
-            echo "  - Port conflicts (8232, 9067, 8080)"
-            echo "  - Network issues"
           fi
           
           echo ""
