@@ -4,10 +4,15 @@ use std::process::Command;
 #[derive(Clone)]
 pub struct DockerCompose {
     project_dir: String,
+    use_prebuilt: bool,
 }
 
 impl DockerCompose {
     pub fn new() -> Result<Self> {
+        Self::with_options(true) // Default to prebuilt
+    }
+    
+    pub fn with_options(use_prebuilt: bool) -> Result<Self> {
         // Get project root (go up from cli/ directory)
         let current_dir = std::env::current_dir()?;
         let project_dir = if current_dir.ends_with("cli") {
@@ -18,12 +23,23 @@ impl DockerCompose {
 
         Ok(Self {
             project_dir: project_dir.to_string_lossy().to_string(),
+            use_prebuilt,
         })
+    }
+    
+    fn compose_file(&self) -> &str {
+        if self.use_prebuilt {
+            "docker-compose.prebuilt.yml"
+        } else {
+            "docker-compose.yml"
+        }
     }
 
     pub fn up(&self, services: &[&str]) -> Result<()> {
         let mut cmd = Command::new("docker");
         cmd.arg("compose")
+            .arg("-f")
+            .arg(self.compose_file())
             .arg("up")
             .arg("-d")
             .current_dir(&self.project_dir);
@@ -43,23 +59,45 @@ impl DockerCompose {
     }
 
     pub fn up_with_profile(&self, profile: &str) -> Result<()> {
-        // BUILD IMAGES FIRST (if needed - Docker caches automatically)
-        let build_output = Command::new("docker")
-            .arg("compose")
-            .arg("--profile")
-            .arg(profile)
-            .arg("build")
-            .current_dir(&self.project_dir)
-            .output()?;
+        if self.use_prebuilt {
+            // PULL IMAGES from GHCR
+            let pull_output = Command::new("docker")
+                .arg("compose")
+                .arg("-f")
+                .arg(self.compose_file())
+                .arg("--profile")
+                .arg(profile)
+                .arg("pull")
+                .current_dir(&self.project_dir)
+                .output()?;
 
-        if !build_output.status.success() {
-            let error = String::from_utf8_lossy(&build_output.stderr);
-            return Err(ZecDevError::Docker(format!("Image build failed: {}", error)));
+            if !pull_output.status.success() {
+                let error = String::from_utf8_lossy(&pull_output.stderr);
+                return Err(ZecDevError::Docker(format!("Image pull failed: {}", error)));
+            }
+        } else {
+            // BUILD IMAGES locally
+            let build_output = Command::new("docker")
+                .arg("compose")
+                .arg("-f")
+                .arg(self.compose_file())
+                .arg("--profile")
+                .arg(profile)
+                .arg("build")
+                .current_dir(&self.project_dir)
+                .output()?;
+
+            if !build_output.status.success() {
+                let error = String::from_utf8_lossy(&build_output.stderr);
+                return Err(ZecDevError::Docker(format!("Image build failed: {}", error)));
+            }
         }
 
-        // THEN START SERVICES
+        // START SERVICES
         let output = Command::new("docker")
             .arg("compose")
+            .arg("-f")
+            .arg(self.compose_file())
             .arg("--profile")
             .arg(profile)
             .arg("up")
@@ -78,6 +116,8 @@ impl DockerCompose {
     pub fn down(&self, volumes: bool) -> Result<()> {
         let mut cmd = Command::new("docker");
         cmd.arg("compose")
+            .arg("-f")
+            .arg(self.compose_file())
             .arg("down")
             .current_dir(&self.project_dir);
 
@@ -98,6 +138,8 @@ impl DockerCompose {
     pub fn ps(&self) -> Result<Vec<String>> {
         let output = Command::new("docker")
             .arg("compose")
+            .arg("-f")
+            .arg(self.compose_file())
             .arg("ps")
             .arg("--format")
             .arg("table")
@@ -122,6 +164,8 @@ impl DockerCompose {
     pub fn logs(&self, service: &str, tail: usize) -> Result<Vec<String>> {
         let output = Command::new("docker")
             .arg("compose")
+            .arg("-f")
+            .arg(self.compose_file())
             .arg("logs")
             .arg("--tail")
             .arg(tail.to_string())
@@ -143,6 +187,8 @@ impl DockerCompose {
     pub fn exec(&self, service: &str, command: &[&str]) -> Result<String> {
         let mut cmd = Command::new("docker");
         cmd.arg("compose")
+            .arg("-f")
+            .arg(self.compose_file())
             .arg("exec")
             .arg("-T") // Non-interactive
             .arg(service)
@@ -165,6 +211,8 @@ impl DockerCompose {
     pub fn is_running(&self) -> bool {
         Command::new("docker")
             .arg("compose")
+            .arg("-f")
+            .arg(self.compose_file())
             .arg("ps")
             .arg("-q")
             .current_dir(&self.project_dir)

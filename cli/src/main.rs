@@ -24,12 +24,16 @@ enum Commands {
     /// Start the ZecKit devnet
     Up {
         /// Light-client backend: lwd (lightwalletd) or zaino
-        #[arg(short, long, default_value = "none")]
+        #[arg(short, long, default_value = "zaino")]
         backend: String,
         
         /// Force fresh start (remove volumes)
         #[arg(short, long)]
         fresh: bool,
+        
+        /// Build images locally instead of pulling from GHCR
+        #[arg(long)]
+        build: bool,
     },
     
     /// Stop the ZecKit devnet
@@ -51,8 +55,8 @@ async fn main() {
     let cli = Cli::parse();
     
     let result = match cli.command {
-        Commands::Up { backend, fresh } => {
-            commands::up::execute(backend, fresh).await
+        Commands::Up { backend, fresh, build } => {
+            commands::up::execute(backend, fresh, build).await
         }
         Commands::Down { purge } => {
             commands::down::execute(purge).await

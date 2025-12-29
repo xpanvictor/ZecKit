@@ -13,13 +13,13 @@ use tokio::time::{sleep, Duration};
 const MAX_WAIT_SECONDS: u64 = 60000;
 const WALLET_TIMEOUT_SECONDS: u64 = 6000;
 
-pub async fn execute(backend: String, fresh: bool) -> Result<()> {
+pub async fn execute(backend: String, fresh: bool, build_locally: bool) -> Result<()> {
     println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan());
     println!("{}", "  ZecKit - Starting Devnet".cyan().bold());
     println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan());
     println!();
     
-    let compose = DockerCompose::new()?;
+    let compose = DockerCompose::with_options(!build_locally)?;
     
     if fresh {
         println!("{}", "Cleaning up old data...".yellow());
@@ -38,29 +38,38 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
         }
     };
     
-    println!("Starting services: {}", services.join(", "));
+    println!("Backend: {}", backend.green());
+    println!("Mode: {}", if build_locally { "Build locally".yellow() } else { "Pull from GHCR".green() });
     println!();
     
-    // Build and start services with progress
+    // Build/pull and start services with progress
     if backend == "lwd" {
-        println!("Building Docker images...");
+        if build_locally {
+            println!("Building Docker images locally (this may take 30-60 minutes)...");
+        } else {
+            println!("Pulling Docker images from GHCR...");
+        }
         println!();
         
-        println!("[1/4] Building Zebra...");
-        println!("[2/4] Building Lightwalletd...");
-        println!("[3/4] Building Zingo Wallet...");
-        println!("[4/4] Building Faucet...");
+        println!("[1/4] {} Zebra...", if build_locally { "Building" } else { "Pulling" });
+        println!("[2/4] {} Lightwalletd...", if build_locally { "Building" } else { "Pulling" });
+        println!("[3/4] {} Zingo Wallet...", if build_locally { "Building" } else { "Pulling" });
+        println!("[4/4] {} Faucet...", if build_locally { "Building" } else { "Pulling" });
         
         compose.up_with_profile("lwd")?;
         println!();
     } else if backend == "zaino" {
-        println!("Building Docker images...");
+        if build_locally {
+            println!("Building Docker images locally (this may take 30-60 minutes)...");
+        } else {
+            println!("Pulling Docker images from GHCR...");
+        }
         println!();
         
-        println!("[1/4] Building Zebra...");
-        println!("[2/4] Building Zaino...");
-        println!("[3/4] Building Zingo Wallet...");
-        println!("[4/4] Building Faucet...");
+        println!("[1/4] {} Zebra...", if build_locally { "Building" } else { "Pulling" });
+        println!("[2/4] {} Zaino...", if build_locally { "Building" } else { "Pulling" });
+        println!("[3/4] {} Zingo Wallet...", if build_locally { "Building" } else { "Pulling" });
+        println!("[4/4] {} Faucet...", if build_locally { "Building" } else { "Pulling" });
         
         compose.up_with_profile("zaino")?;
         println!();
