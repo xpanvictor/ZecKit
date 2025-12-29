@@ -1,41 +1,39 @@
 # ========================================
-# ZecKit Docker Compose
+# ZecKit Docker Compose - Pre-built Images
 # ========================================
-# 
-# QUICK START (using pre-built images - recommended):
+# Use this for faster startup (~2-5 min vs 60 min build time)
+#
+# QUICK START:
 #   docker compose -f docker-compose.prebuilt.yml --profile zaino up -d
 #
-# BUILD FROM SOURCE (takes 50-60 minutes):
-#   docker compose --profile zaino up -d
+# OR with lightwalletd:
+#   docker compose -f docker-compose.prebuilt.yml --profile lwd up -d
 #
+# Images are pulled from ghcr.io/xpanvictor/zeckit-*
 # ========================================
 
-# ========================================
-# NETWORKS
-# ========================================
 networks:
   zeckit-network:
     driver: bridge
 
-# ========================================
-# VOLUMES
-# ========================================
 volumes:
   zebra-data:
   lightwalletd-data:
   zaino-data:
 
-# ========================================
-# SERVICES
-# ========================================
+x-ghcr-images:
+  zebra: &zebra-image ghcr.io/xpanvictor/zeckit-zebra:latest
+  zaino: &zaino-image ghcr.io/xpanvictor/zeckit-zaino:latest
+  zingo: &zingo-image ghcr.io/xpanvictor/zeckit-zingo:latest
+  faucet: &faucet-image ghcr.io/xpanvictor/zeckit-faucet:latest
+  lightwalletd: &lwd-image ghcr.io/xpanvictor/zeckit-lightwalletd:latest
+
 services:
   # ========================================
   # ZEBRA NODE
   # ========================================
   zebra:
-    build:
-      context: ./docker/zebra
-      dockerfile: Dockerfile
+    image: *zebra-image
     container_name: zeckit-zebra
     ports:
       - "127.0.0.1:8232:8232"
@@ -56,46 +54,10 @@ services:
       start_period: 120s
 
   # ========================================
-  # LIGHTWALLETD (Profile: lwd)
-  # ========================================
-  lightwalletd:
-    build:
-      context: ./docker/lightwalletd
-      dockerfile: Dockerfile
-    container_name: zeckit-lightwalletd
-    ports:
-      - "127.0.0.1:9067:9067"
-    depends_on:
-      zebra:
-        condition: service_healthy
-    environment:
-      - ZEBRA_RPC_HOST=zebra
-      - ZEBRA_RPC_PORT=8232
-      - LWD_GRPC_BIND=0.0.0.0:9067
-    volumes:
-      - lightwalletd-data:/var/lightwalletd
-    networks:
-      - zeckit-network
-    restart: unless-stopped
-    profiles:
-      - lwd
-    healthcheck:
-      test: ["CMD", "grpc_health_probe", "-addr=:9067"]
-      interval: 30s
-      timeout: 10s
-      retries: 20
-      start_period: 300s
-
-  # ========================================
   # ZAINO INDEXER (Profile: zaino)
   # ========================================
   zaino:
-    build:
-      context: ./docker/zaino
-      dockerfile: Dockerfile
-      args:
-        - NO_TLS=true
-        - RUST_VERSION=1.91.1
+    image: *zaino-image
     container_name: zeckit-zaino
     ports:
       - "127.0.0.1:9067:9067"
@@ -125,42 +87,10 @@ services:
       start_period: 120s
 
   # ========================================
-  # ZINGO WALLET - LWD Profile
-  # ========================================
-  zingo-wallet-lwd:
-    build:
-      context: ./docker/zingo
-      dockerfile: Dockerfile
-    container_name: zeckit-zingo-wallet
-    tmpfs:
-      - /var/zingo:mode=1777,size=512m
-    depends_on:
-      zebra:
-        condition: service_healthy
-      lightwalletd:
-        condition: service_started
-    environment:
-      - ZINGO_DATA_DIR=/var/zingo
-      - LIGHTWALLETD_URI=http://lightwalletd:9067
-    networks:
-      - zeckit-network
-    restart: unless-stopped
-    profiles:
-      - lwd
-    healthcheck:
-      test: ["CMD", "test", "-d", "/var/zingo"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # ========================================
   # ZINGO WALLET - Zaino Profile
   # ========================================
   zingo-wallet-zaino:
-    build:
-      context: ./docker/zingo
-      dockerfile: Dockerfile
+    image: *zingo-image
     container_name: zeckit-zingo-wallet
     tmpfs:
       - /var/zingo:mode=1777,size=512m
@@ -185,49 +115,10 @@ services:
       start_period: 60s
 
   # ========================================
-  # FAUCET SERVICE - LWD Profile
-  # ========================================
-  faucet-lwd:
-    build:
-      context: ./faucet
-      dockerfile: Dockerfile
-    container_name: zeckit-faucet
-    ports:
-      - "127.0.0.1:8080:8080"
-    volumes:
-      - ./faucet:/app:ro
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      - LIGHTWALLETD_URI=http://lightwalletd:9067
-      - WALLET_CONTAINER=zeckit-zingo-wallet
-      - WALLET_DATA_DIR=/var/zingo
-    depends_on:
-      zebra:
-        condition: service_healthy
-      lightwalletd:
-        condition: service_started
-      zingo-wallet-lwd:
-        condition: service_healthy
-    networks:
-      - zeckit-network
-    restart: unless-stopped
-    profiles:
-      - lwd
-    user: root
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # ========================================
   # FAUCET SERVICE - Zaino Profile
   # ========================================
   faucet-zaino:
-    build:
-      context: ./faucet
-      dockerfile: Dockerfile
+    image: *faucet-image
     container_name: zeckit-faucet
     ports:
       - "127.0.0.1:8080:8080"
@@ -250,6 +141,98 @@ services:
     restart: unless-stopped
     profiles:
       - zaino
+    user: root
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ========================================
+  # LIGHTWALLETD (Profile: lwd)
+  # ========================================
+  lightwalletd:
+    image: *lwd-image
+    container_name: zeckit-lightwalletd
+    ports:
+      - "127.0.0.1:9067:9067"
+    depends_on:
+      zebra:
+        condition: service_healthy
+    environment:
+      - ZEBRA_RPC_HOST=zebra
+      - ZEBRA_RPC_PORT=8232
+      - LWD_GRPC_BIND=0.0.0.0:9067
+    volumes:
+      - lightwalletd-data:/var/lightwalletd
+    networks:
+      - zeckit-network
+    restart: unless-stopped
+    profiles:
+      - lwd
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=:9067"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 300s
+
+  # ========================================
+  # ZINGO WALLET - LWD Profile
+  # ========================================
+  zingo-wallet-lwd:
+    image: *zingo-image
+    container_name: zeckit-zingo-wallet
+    tmpfs:
+      - /var/zingo:mode=1777,size=512m
+    depends_on:
+      zebra:
+        condition: service_healthy
+      lightwalletd:
+        condition: service_started
+    environment:
+      - ZINGO_DATA_DIR=/var/zingo
+      - LIGHTWALLETD_URI=http://lightwalletd:9067
+    networks:
+      - zeckit-network
+    restart: unless-stopped
+    profiles:
+      - lwd
+    healthcheck:
+      test: ["CMD", "test", "-d", "/var/zingo"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ========================================
+  # FAUCET SERVICE - LWD Profile
+  # ========================================
+  faucet-lwd:
+    image: *faucet-image
+    container_name: zeckit-faucet
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./faucet:/app:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - LIGHTWALLETD_URI=http://lightwalletd:9067
+      - WALLET_CONTAINER=zeckit-zingo-wallet
+      - WALLET_DATA_DIR=/var/zingo
+    depends_on:
+      zebra:
+        condition: service_healthy
+      lightwalletd:
+        condition: service_started
+      zingo-wallet-lwd:
+        condition: service_healthy
+    networks:
+      - zeckit-network
+    restart: unless-stopped
+    profiles:
+      - lwd
     user: root
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]

@@ -15,10 +15,15 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /build
 RUN git clone https://github.com/zingolabs/zingolib.git && \
     cd zingolib && \
-    git checkout dev && \
+    git checkout dev
+
+WORKDIR /build/zingolib
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/zingolib/target \
     rustup set profile minimal && \
     cargo build --release --package zingo-cli --features regtest && \
-    mv target/release/zingo-cli /usr/local/bin/ && \
+    cp target/release/zingo-cli /usr/local/bin/ && \
     chmod +x /usr/local/bin/zingo-cli
 
 RUN mkdir -p /var/zingo && chmod 777 /var/zingo
