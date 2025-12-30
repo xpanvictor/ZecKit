@@ -1,0 +1,92 @@
+# ========================================
+# Example: Using ZecKit GitHub Action
+# ========================================
+# Copy this workflow to your repository at:
+#   .github/workflows/zcash-e2e.yml
+#
+# This runs E2E tests on every PR using both
+# lightwalletd and Zaino backends.
+# ========================================
+
+name: Zcash E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  e2e-test:
+    name: E2E Test (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [zaino, lwd]
+        include:
+          - backend: zaino
+            experimental: false
+          - backend: lwd
+            experimental: false
+
+    continue-on-error: ${{ matrix.experimental }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start ZecKit Devnet
+        id: devnet
+        uses: xpanvictor/ZecKit@main
+        with:
+          backend: ${{ matrix.backend }}
+          startup-timeout: '30'
+          min-blocks: '101'
+          run-e2e: 'true'
+
+      - name: Display devnet info
+        run: |
+          echo "Zebra RPC: ${{ steps.devnet.outputs.zebra-rpc }}"
+          echo "Faucet API: ${{ steps.devnet.outputs.faucet-api }}"
+          echo "Faucet Address: ${{ steps.devnet.outputs.faucet-address }}"
+          echo "Block Height: ${{ steps.devnet.outputs.block-height }}"
+          echo "E2E Result: ${{ steps.devnet.outputs.e2e-result }}"
+
+      - name: Run your app tests
+        run: |
+          # Add your application-specific tests here
+          # The devnet is running and ready to use
+          
+          echo "Testing against Zebra RPC..."
+          curl -sf ${{ steps.devnet.outputs.zebra-rpc }} \
+            -X POST \
+            -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"2.0","id":"1","method":"getinfo","params":[]}' | jq .
+          
+          echo ""
+          echo "Checking faucet balance..."
+          curl -sf ${{ steps.devnet.outputs.faucet-api }}/stats | jq .
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          mkdir -p logs
+          docker compose -f docker-compose.prebuilt.yml logs > logs/all-services.log 2>&1 || true
+          docker ps -a > logs/containers.log 2>&1 || true
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-${{ matrix.backend }}-${{ github.run_number }}
+          path: logs/
+          retention-days: 7
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -f docker-compose.prebuilt.yml --profile ${{ matrix.backend }} down -v || true

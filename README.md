@@ -9,18 +9,18 @@
 
 ## Project Status
 
-**Current Milestone:** M2 Complete - Real Blockchain Transactions  
+**Current Milestone:** M3 Complete - GitHub Action + Golden E2E  
 
 ### What's Delivered
 
-** M1 - Foundation**
+**✅ M1 - Foundation**
 - Zebra regtest node in Docker
 - Health check automation  
 - Basic smoke tests
 - CI pipeline (self-hosted runner)
 - Project structure and documentation
 
-** M2 - Real Transactions**
+**✅ M2 - Real Transactions**
 - `zecdev` CLI tool with automated setup
 - Real blockchain transactions via ZingoLib
 - Faucet API with actual on-chain broadcasting
@@ -29,11 +29,11 @@
 - UA (ZIP-316) address generation
 - Comprehensive test suite (M1 + M2)
 
-** M3 - GitHub Action (Next)**
-- Reusable GitHub Action
-- Golden E2E shielded flows
-- Pre-mined blockchain snapshots
-- Backend parity testing
+**✅ M3 - GitHub Action**
+- Reusable GitHub Action for any repository
+- Golden E2E shielded flows (generate UA → fund → shield → send → verify)
+- Pre-built Docker images on GHCR
+- Backend matrix testing (lwd + zaino)
 
 ---
 
@@ -103,6 +103,85 @@ curl http://localhost:8080/stats  # Should show balance
 curl -X POST http://localhost:8080/request \
   -H "Content-Type: application/json" \
   -d '{"address": "tmXXXXX...", "amount": 10.0}'  # Real TXID returned!
+```
+
+---
+
+## GitHub Action (5-Line CI)
+
+Add ZecKit to your repository's CI in 5 lines:
+
+```yaml
+# .github/workflows/zcash-tests.yml
+name: Zcash E2E
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: xpanvictor/ZecKit@main
+        with:
+          backend: zaino
+          run-e2e: 'true'
+```
+
+### Action Inputs
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `backend` | `zaino` | Light client backend: `zaino` or `lwd` |
+| `startup-timeout` | `30` | Max startup time in minutes |
+| `min-blocks` | `101` | Blocks to mine (101 for coinbase maturity) |
+| `run-e2e` | `false` | Run golden E2E flow tests |
+
+### Action Outputs
+
+| Output | Description |
+|--------|-------------|
+| `zebra-rpc` | Zebra RPC endpoint (http://127.0.0.1:8232) |
+| `faucet-api` | Faucet API endpoint (http://127.0.0.1:8080) |
+| `faucet-address` | Pre-funded wallet address |
+| `block-height` | Current block height |
+| `e2e-result` | E2E test result (pass/fail/skipped) |
+
+### Backend Matrix Example
+
+Test against both backends:
+
+```yaml
+jobs:
+  e2e-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        backend: [zaino, lwd]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: xpanvictor/ZecKit@main
+        id: devnet
+        with:
+          backend: ${{ matrix.backend }}
+          run-e2e: 'true'
+      - name: Run your tests
+        run: |
+          curl ${{ steps.devnet.outputs.faucet-api }}/stats
+```
+
+### Golden E2E Flow
+
+The E2E tests exercise the complete shielded transaction lifecycle:
+
+1. **Generate UA** - Create Unified Address (ZIP-316)
+2. **Fund** - Request ZEC from faucet (transparent)
+3. **Autoshield** - Shield transparent funds to Orchard
+4. **Shielded Send** - Send Orchard → Orchard
+5. **Rescan/Sync** - Wallet rescan
+6. **Verify** - Check final balances
+
+Run locally:
+```bash
+./cli/target/release/zecdev e2e
 ```
 
 ---

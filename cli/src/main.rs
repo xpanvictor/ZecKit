@@ -48,6 +48,9 @@ enum Commands {
 
     /// Run smoke tests
     Test,
+
+    /// Run golden E2E flow tests
+    E2e,
 }
 
 #[tokio::main]
@@ -63,6 +66,7 @@ async fn main() {
         Commands::Down { purge } => commands::down::execute(purge).await,
         Commands::Status => commands::status::execute().await,
         Commands::Test => commands::test::execute().await,
+        Commands::E2e => commands::e2e::execute().await,
     };
 
     if let Err(e) = result {
