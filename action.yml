@@ -208,3 +208,45 @@ runs:
       shell: bash
       run: |
         echo "result=skipped" >> $GITHUB_OUTPUT
+
+    - name: Collect logs on failure
+      if: failure()
+      shell: bash
+      run: |
+        cd $ZECKIT_DIR
+        echo "Collecting diagnostic logs..."
+        mkdir -p /tmp/zeckit-logs
+        
+        docker compose -f docker-compose.prebuilt.yml --profile ${{ inputs.backend }} logs zebra > /tmp/zeckit-logs/zebra.log 2>&1 || true
+        
+        if [[ "${{ inputs.backend }}" == "zaino" ]]; then
+          docker compose -f docker-compose.prebuilt.yml --profile zaino logs zaino > /tmp/zeckit-logs/zaino.log 2>&1 || true
+          docker compose -f docker-compose.prebuilt.yml --profile zaino logs zingo-wallet-zaino > /tmp/zeckit-logs/zingo-wallet.log 2>&1 || true
+          docker compose -f docker-compose.prebuilt.yml --profile zaino logs faucet-zaino > /tmp/zeckit-logs/faucet.log 2>&1 || true
+        else
+          docker compose -f docker-compose.prebuilt.yml --profile lwd logs lightwalletd > /tmp/zeckit-logs/lightwalletd.log 2>&1 || true
+          docker compose -f docker-compose.prebuilt.yml --profile lwd logs zingo-wallet-lwd > /tmp/zeckit-logs/zingo-wallet.log 2>&1 || true
+          docker compose -f docker-compose.prebuilt.yml --profile lwd logs faucet-lwd > /tmp/zeckit-logs/faucet.log 2>&1 || true
+        fi
+        
+        docker ps -a > /tmp/zeckit-logs/containers.log 2>&1 || true
+        docker network ls > /tmp/zeckit-logs/networks.log 2>&1 || true
+        
+        echo "✓ Logs collected in /tmp/zeckit-logs/"
+        ls -la /tmp/zeckit-logs/
+
+    - name: Upload logs artifact
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: zeckit-logs-${{ github.run_number }}
+        path: /tmp/zeckit-logs/
+        retention-days: 7
+
+    - name: Cleanup on failure
+      if: failure()
+      shell: bash
+      run: |
+        cd $ZECKIT_DIR
+        echo "Cleaning up containers..."
+        docker compose -f docker-compose.prebuilt.yml --profile ${{ inputs.backend }} down --remove-orphans || true
