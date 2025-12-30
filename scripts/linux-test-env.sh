@@ -51,7 +51,8 @@ docker run -it \
     /bin/bash -c '
         echo "Installing dependencies..."
         apt-get update -qq
-        apt-get install -y -qq curl git ca-certificates gnupg lsb-release jq > /dev/null
+        apt-get install -y -qq curl git ca-certificates gnupg lsb-release jq \
+            build-essential gcc g++ pkg-config libssl-dev cmake > /dev/null
 
         # Install Docker CLI
         echo "Installing Docker CLI..."

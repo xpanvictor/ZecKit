@@ -3,8 +3,8 @@ use colored::*;
 use std::process;
 
 mod commands;
-mod docker;
 mod config;
+mod docker;
 mod error;
 mod utils;
 
@@ -26,26 +26,26 @@ enum Commands {
         /// Light-client backend: lwd (lightwalletd) or zaino
         #[arg(short, long, default_value = "zaino")]
         backend: String,
-        
+
         /// Force fresh start (remove volumes)
         #[arg(short, long)]
         fresh: bool,
-        
+
         /// Build images locally instead of pulling from GHCR
         #[arg(long)]
         build: bool,
     },
-    
+
     /// Stop the ZecKit devnet
     Down {
         /// Remove volumes (clean slate)
         #[arg(short, long)]
         purge: bool,
     },
-    
+
     /// Show devnet status
     Status,
-    
+
     /// Run smoke tests
     Test,
 }
@@ -53,22 +53,18 @@ enum Commands {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    
+
     let result = match cli.command {
-        Commands::Up { backend, fresh, build } => {
-            commands::up::execute(backend, fresh, build).await
-        }
-        Commands::Down { purge } => {
-            commands::down::execute(purge).await
-        }
-        Commands::Status => {
-            commands::status::execute().await
-        }
-        Commands::Test => {
-            commands::test::execute().await
-        }
+        Commands::Up {
+            backend,
+            fresh,
+            build,
+        } => commands::up::execute(backend, fresh, build).await,
+        Commands::Down { purge } => commands::down::execute(purge).await,
+        Commands::Status => commands::status::execute().await,
+        Commands::Test => commands::test::execute().await,
     };
-    
+
     if let Err(e) = result {
         eprintln!("{} {}", "Error:".red().bold(), e);
         process::exit(1);

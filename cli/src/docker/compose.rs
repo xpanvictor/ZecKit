@@ -11,7 +11,7 @@ impl DockerCompose {
     pub fn new() -> Result<Self> {
         Self::with_options(true) // Default to prebuilt
     }
-    
+
     pub fn with_options(use_prebuilt: bool) -> Result<Self> {
         // Get project root (go up from cli/ directory)
         let current_dir = std::env::current_dir()?;
@@ -26,7 +26,7 @@ impl DockerCompose {
             use_prebuilt,
         })
     }
-    
+
     fn compose_file(&self) -> &str {
         if self.use_prebuilt {
             "docker-compose.prebuilt.yml"
@@ -60,7 +60,7 @@ impl DockerCompose {
 
     pub fn up_with_profile(&self, profile: &str) -> Result<()> {
         if self.use_prebuilt {
-            // PULL IMAGES from GHCR
+            // PULL IMAGES from GHCR (force amd64 for pre-built images)
             let pull_output = Command::new("docker")
                 .arg("compose")
                 .arg("-f")
@@ -68,6 +68,7 @@ impl DockerCompose {
                 .arg("--profile")
                 .arg(profile)
                 .arg("pull")
+                .env("DOCKER_DEFAULT_PLATFORM", "linux/amd64")
                 .current_dir(&self.project_dir)
                 .output()?;
 
@@ -89,7 +90,10 @@ impl DockerCompose {
 
             if !build_output.status.success() {
                 let error = String::from_utf8_lossy(&build_output.stderr);
-                return Err(ZecDevError::Docker(format!("Image build failed: {}", error)));
+                return Err(ZecDevError::Docker(format!(
+                    "Image build failed: {}",
+                    error
+                )));
             }
         }
 
