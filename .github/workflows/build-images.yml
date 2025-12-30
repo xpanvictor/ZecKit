@@ -79,8 +79,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64
-        timeout-minutes: 120
+          platforms: linux/amd64
+        timeout-minutes: 90
 
   update-compose:
     name: Verify Images
