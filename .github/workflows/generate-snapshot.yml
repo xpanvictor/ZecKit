@@ -10,7 +10,7 @@ jobs:
   generate-snapshot:
     name: Generate Pre-mined Snapshot
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     
     steps:
       - name: Checkout repository
@@ -51,11 +51,18 @@ jobs:
             sleep 5
           done
           echo "✓ Zebra RPC ready"
+          
+          # Show initial logs to confirm mining is active
+          echo "Initial Zebra logs:"
+          docker logs snapshot-zebra 2>&1 | tail -20
 
       - name: Wait for 110 blocks
         run: |
-          echo "Mining blocks (this takes ~15-20 minutes)..."
+          echo "Mining blocks (this may take 30-60 minutes on first run)..."
           MIN_BLOCKS=110
+          START_TIME=$(date +%s)
+          LAST_HEIGHT=0
+          STALL_COUNT=0
           
           while true; do
             BLOCK_HEIGHT=$(curl -sf --max-time 5 \
@@ -68,7 +75,22 @@ jobs:
               break
             fi
             
-            echo "  Height: $BLOCK_HEIGHT / $MIN_BLOCKS"
+            # Check for stalls
+            if [ "$BLOCK_HEIGHT" == "$LAST_HEIGHT" ]; then
+              STALL_COUNT=$((STALL_COUNT + 1))
+              if [ $STALL_COUNT -ge 10 ]; then
+                echo "::warning::Mining appears stalled at height $BLOCK_HEIGHT"
+                echo "Recent logs:"
+                docker logs snapshot-zebra 2>&1 | tail -30
+                STALL_COUNT=0
+              fi
+            else
+              STALL_COUNT=0
+            fi
+            LAST_HEIGHT=$BLOCK_HEIGHT
+            
+            ELAPSED=$(( $(date +%s) - START_TIME ))
+            echo "  Height: $BLOCK_HEIGHT / $MIN_BLOCKS (${ELAPSED}s elapsed)"
             sleep 30
           done
 
