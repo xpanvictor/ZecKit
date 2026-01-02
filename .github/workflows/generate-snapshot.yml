@@ -1,0 +1,116 @@
+name: Generate Blockchain Snapshot
+
+on:
+  workflow_dispatch:  # Manual trigger only
+  schedule:
+    # Regenerate weekly (in case of protocol changes)
+    - cron: '0 0 * * 0'
+
+jobs:
+  generate-snapshot:
+    name: Generate Pre-mined Snapshot
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Pull Zebra image
+        run: |
+          docker pull ghcr.io/xpanvictor/zeckit-zebra:latest
+
+      - name: Start Zebra and mine blocks
+        run: |
+          echo "Starting Zebra node..."
+          
+          # Create a minimal compose just for Zebra
+          cat > /tmp/zebra-only.yml << 'EOF'
+          services:
+            zebra:
+              image: ghcr.io/xpanvictor/zeckit-zebra:latest
+              container_name: snapshot-zebra
+              ports:
+                - "127.0.0.1:8232:8232"
+              volumes:
+                - ./docker/configs/zebra.toml:/etc/zebrad/zebrad.toml:ro
+                - zebra-data:/var/zebra
+          volumes:
+            zebra-data:
+          EOF
+          
+          docker compose -f /tmp/zebra-only.yml up -d
+          
+          # Wait for RPC
+          echo "Waiting for Zebra RPC..."
+          until curl -sf --max-time 5 \
+            --data-binary '{"jsonrpc":"2.0","id":"1","method":"getinfo","params":[]}' \
+            -H 'content-type: application/json' \
+            http://127.0.0.1:8232 > /dev/null 2>&1; do
+            echo "  Waiting..."
+            sleep 5
+          done
+          echo "✓ Zebra RPC ready"
+
+      - name: Wait for 110 blocks
+        run: |
+          echo "Mining blocks (this takes ~15-20 minutes)..."
+          MIN_BLOCKS=110
+          
+          while true; do
+            BLOCK_HEIGHT=$(curl -sf --max-time 5 \
+              --data-binary '{"jsonrpc":"2.0","id":"1","method":"getblockcount","params":[]}' \
+              -H 'content-type: application/json' \
+              http://127.0.0.1:8232 | jq -r '.result // 0')
+            
+            if [ "$BLOCK_HEIGHT" -ge "$MIN_BLOCKS" ]; then
+              echo "✓ Reached $BLOCK_HEIGHT blocks"
+              break
+            fi
+            
+            echo "  Height: $BLOCK_HEIGHT / $MIN_BLOCKS"
+            sleep 30
+          done
+
+      - name: Create snapshot
+        run: |
+          echo "Creating snapshot..."
+          docker compose -f /tmp/zebra-only.yml stop zebra
+          
+          mkdir -p fixtures
+          
+          # Find and export the volume
+          VOLUME_NAME=$(docker volume ls --format '{{.Name}}' | grep zebra-data | head -1)
+          
+          docker run --rm \
+            -v "${VOLUME_NAME}:/data:ro" \
+            -v "$(pwd)/fixtures:/backup" \
+            alpine:latest \
+            tar -czf /backup/blockchain-snapshot.tar.gz -C /data .
+          
+          ls -lh fixtures/blockchain-snapshot.tar.gz
+          
+          docker compose -f /tmp/zebra-only.yml down -v
+
+      - name: Upload snapshot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: blockchain-snapshot
+          path: fixtures/blockchain-snapshot.tar.gz
+          retention-days: 90
+
+      - name: Create/Update Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: snapshot-latest
+          name: Pre-mined Blockchain Snapshot
+          body: |
+            Pre-mined blockchain snapshot with 110+ blocks for instant coinbase maturity.
+            
+            This snapshot is automatically used by the ZecKit GitHub Action for fast CI startup.
+            
+            Generated: ${{ github.event.repository.updated_at }}
+          files: fixtures/blockchain-snapshot.tar.gz
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

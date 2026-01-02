@@ -88,12 +88,52 @@ runs:
           echo "ZECKIT_DIR=${{ inputs.working-directory }}" >> $GITHUB_ENV
         fi
 
+    - name: Download pre-mined snapshot
+      shell: bash
+      run: |
+        echo "Downloading pre-mined blockchain snapshot..."
+        mkdir -p /tmp/snapshot
+        
+        # Download from GitHub Releases
+        SNAPSHOT_URL="https://github.com/xpanvictor/ZecKit/releases/download/snapshot-latest/blockchain-snapshot.tar.gz"
+        
+        if curl -sfL -o /tmp/snapshot/blockchain-snapshot.tar.gz "$SNAPSHOT_URL"; then
+          echo "✓ Snapshot downloaded ($(ls -lh /tmp/snapshot/blockchain-snapshot.tar.gz | awk '{print $5}'))"
+          echo "SNAPSHOT_AVAILABLE=true" >> $GITHUB_ENV
+        else
+          echo "⚠ Snapshot not available, will mine blocks from scratch"
+          echo "SNAPSHOT_AVAILABLE=false" >> $GITHUB_ENV
+        fi
+
     - name: Pull Docker images
       shell: bash
       run: |
         cd $ZECKIT_DIR
         echo "Pulling pre-built images for ${{ inputs.backend }} backend..."
         DOCKER_DEFAULT_PLATFORM=linux/amd64 docker compose -f docker-compose.prebuilt.yml --profile ${{ inputs.backend }} pull
+
+    - name: Restore snapshot to volume
+      if: env.SNAPSHOT_AVAILABLE == 'true'
+      shell: bash
+      run: |
+        cd $ZECKIT_DIR
+        echo "Restoring pre-mined blockchain snapshot..."
+        
+        # Get the project name that docker compose will use
+        PROJECT_NAME=$(basename "$ZECKIT_DIR" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
+        VOLUME_NAME="${PROJECT_NAME}_zebra-data"
+        
+        echo "Creating volume: $VOLUME_NAME"
+        docker volume create "$VOLUME_NAME" || true
+        
+        # Restore snapshot to volume
+        docker run --rm \
+          -v "${VOLUME_NAME}:/data" \
+          -v /tmp/snapshot:/backup:ro \
+          alpine:latest \
+          sh -c "cd /data && tar -xzf /backup/blockchain-snapshot.tar.gz"
+        
+        echo "✓ Snapshot restored to $VOLUME_NAME"
 
     - name: Start devnet
       id: devnet
@@ -125,8 +165,17 @@ runs:
         done
         echo "✓ Zebra RPC ready"
         
-        # Wait for minimum blocks
+        # Wait for minimum blocks (skip long wait if snapshot was restored)
         echo "Waiting for ${{ inputs.min-blocks }} blocks..."
+        SNAPSHOT_MODE="${{ env.SNAPSHOT_AVAILABLE }}"
+        BLOCK_WAIT_TIMEOUT=$MAX_SECONDS
+        
+        # If snapshot was restored, blocks should already be there - use shorter timeout
+        if [ "$SNAPSHOT_MODE" == "true" ]; then
+          echo "Snapshot was restored, blocks should be ready quickly..."
+          BLOCK_WAIT_TIMEOUT=120  # 2 minutes max for snapshot mode
+        fi
+        
         while true; do
           BLOCK_HEIGHT=$(curl -sf --max-time 5 \
             --data-binary '{"jsonrpc":"2.0","id":"1","method":"getblockcount","params":[]}' \
@@ -138,8 +187,12 @@ runs:
             break
           fi
           
-          if [ $SECONDS -ge $MAX_SECONDS ]; then
-            echo "::error::Did not reach ${{ inputs.min-blocks }} blocks in time"
+          if [ $SECONDS -ge $BLOCK_WAIT_TIMEOUT ]; then
+            if [ "$SNAPSHOT_MODE" == "true" ]; then
+              echo "::warning::Snapshot was restored but blocks not at expected height. Mining may be in progress."
+            fi
+            echo "::error::Did not reach ${{ inputs.min-blocks }} blocks within timeout"
+            echo "Current height: $BLOCK_HEIGHT, Expected: ${{ inputs.min-blocks }}"
             exit 1
           fi
           
