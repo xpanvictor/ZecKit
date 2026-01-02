@@ -41,17 +41,24 @@ sleep 30
 
 # Create wallet if doesn't exist
 if [ ! -f "/var/zingo/zingo-wallet.dat" ]; then
-    echo "📝 Creating new wallet..."
+    echo "📝 Creating wallet from deterministic seed..."
     
-    # Initialize wallet with --chain regtest
+    # Use a fixed seed phrase for deterministic address generation
+    # This ensures the faucet wallet always has the same address
+    # Standard BIP-39 test mnemonic (24 words)
+    FAUCET_SEED="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art"
+    
+    # Initialize wallet with seed using the restore command
+    # Birthday height 0 means scan from genesis
     zingo-cli --data-dir /var/zingo \
               --server ${BACKEND_URI} \
               --chain regtest \
-              --nosync << 'EOF'
+              --nosync << EOF
+restore "${FAUCET_SEED}" 0
 quit
 EOF
     
-    echo "✅ Wallet created!"
+    echo "✅ Wallet restored from seed!"
     
     # Get wallet's unified address
     WALLET_ADDRESS=$(zingo-cli --data-dir /var/zingo \

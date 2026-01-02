@@ -10,23 +10,81 @@ jobs:
   generate-snapshot:
     name: Generate Pre-mined Snapshot
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Pull Zebra image
+      - name: Pull Docker images
         run: |
+          echo "Pulling pre-built images..."
           docker pull ghcr.io/xpanvictor/zeckit-zebra:latest
+          docker pull ghcr.io/xpanvictor/zeckit-zaino:latest
+          docker pull ghcr.io/xpanvictor/zeckit-zingo:latest
+
+      - name: Start initial stack to get wallet address
+        run: |
+          echo "Starting Zebra, Zaino, and Zingo to get wallet address..."
+          
+          # Start with default config first (just to get wallet address)
+          DOCKER_DEFAULT_PLATFORM=linux/amd64 docker compose -f docker-compose.prebuilt.yml --profile zaino up -d zebra zaino zingo-wallet-zaino
+          
+          # Wait for Zebra RPC
+          echo "Waiting for Zebra RPC..."
+          SECONDS=0
+          until curl -sf --max-time 5 \
+            --data-binary '{"jsonrpc":"2.0","id":"1","method":"getinfo","params":[]}' \
+            -H 'content-type: application/json' \
+            http://127.0.0.1:8232 > /dev/null 2>&1; do
+            if [ $SECONDS -ge 300 ]; then
+              echo "::error::Zebra RPC not ready"
+              docker logs zeckit-zebra 2>&1 | tail -50
+              exit 1
+            fi
+            echo "  Waiting... (${SECONDS}s)"
+            sleep 5
+          done
+          echo "✓ Zebra RPC ready"
+          
+          # Wait for wallet container to create wallet
+          echo "Waiting for wallet to initialize..."
+          sleep 60
+          
+          # Get wallet's transparent address
+          echo "Getting wallet transparent address..."
+          T_ADDR=$(docker exec zeckit-zingo-wallet bash -c "echo -e 't_addresses\nquit' | zingo-cli --data-dir /var/zingo --server http://zaino:9067 --chain regtest --nosync" 2>/dev/null | grep -o 'tm[a-zA-Z0-9]*' | head -1)
+          
+          if [ -z "$T_ADDR" ]; then
+            echo "::error::Could not get transparent address from wallet"
+            docker logs zeckit-zingo-wallet 2>&1 | tail -50
+            exit 1
+          fi
+          
+          echo "✓ Wallet transparent address: $T_ADDR"
+          echo "MINING_ADDRESS=$T_ADDR" >> $GITHUB_ENV
+          
+          # Stop containers
+          docker compose -f docker-compose.prebuilt.yml --profile zaino down
+
+      - name: Update Zebra config with wallet address
+        run: |
+          echo "Updating zebra.toml with mining address: $MINING_ADDRESS"
+          
+          # Backup original
+          cp docker/configs/zebra.toml docker/configs/zebra.toml.original
+          
+          # Update mining address
+          sed -i "s|miner_address = \".*\"|miner_address = \"$MINING_ADDRESS\"|" docker/configs/zebra.toml
+          
+          echo "Updated zebra.toml:"
+          grep miner_address docker/configs/zebra.toml
 
       - name: Start Zebra and mine blocks
         run: |
-          echo "Starting Zebra node..."
-          echo "Working directory: $(pwd)"
-          echo "Config file exists: $(ls -la docker/configs/zebra.toml)"
+          echo "Starting Zebra with updated mining address..."
           
-          # Create a minimal compose just for Zebra with absolute paths
+          # Create a minimal compose just for Zebra
           cat > /tmp/zebra-only.yml << EOF
           services:
             zebra:
@@ -41,57 +99,30 @@ jobs:
             zebra-data:
           EOF
           
-          echo "Generated compose file:"
-          cat /tmp/zebra-only.yml
-          
           docker compose -f /tmp/zebra-only.yml up -d
           
-          # Give it a few seconds to start then show initial logs
-          sleep 10
-          echo "=== Initial Zebra logs ==="
-          docker logs snapshot-zebra 2>&1 || echo "Failed to get logs"
-          echo "==========================="
-          
-          # Wait for RPC with timeout and periodic log output
+          # Wait for RPC
           echo "Waiting for Zebra RPC..."
           SECONDS=0
-          MAX_WAIT=300  # 5 minutes max to wait for RPC
-          
-          while ! curl -sf --max-time 5 \
+          until curl -sf --max-time 5 \
             --data-binary '{"jsonrpc":"2.0","id":"1","method":"getinfo","params":[]}' \
             -H 'content-type: application/json' \
             http://127.0.0.1:8232 > /dev/null 2>&1; do
-            
-            if [ $SECONDS -ge $MAX_WAIT ]; then
-              echo "::error::Zebra RPC not ready after ${MAX_WAIT}s"
-              echo "=== Final Zebra logs ==="
+            if [ $SECONDS -ge 300 ]; then
+              echo "::error::Zebra RPC not ready"
               docker logs snapshot-zebra 2>&1 | tail -100
-              echo "==========================="
               exit 1
             fi
-            
-            # Show logs every minute
-            if [ $((SECONDS % 60)) -lt 5 ]; then
-              echo "  Still waiting... (${SECONDS}s) - Container status:"
-              docker ps -a | grep zebra || true
-            fi
-            
-            echo "  Waiting... (${SECONDS}s)"
             sleep 5
           done
-          echo "✓ Zebra RPC ready after ${SECONDS}s"
-          
-          # Show initial logs to confirm mining is active
-          echo "Initial Zebra logs:"
-          docker logs snapshot-zebra 2>&1 | tail -20
+          echo "✓ Zebra RPC ready"
 
       - name: Wait for 110 blocks
         run: |
-          echo "Mining blocks (this may take 30-60 minutes on first run)..."
+          echo "Mining blocks to wallet address (this takes 30-60 minutes)..."
           MIN_BLOCKS=110
           START_TIME=$(date +%s)
           LAST_HEIGHT=0
-          STALL_COUNT=0
           
           while true; do
             BLOCK_HEIGHT=$(curl -sf --max-time 5 \
@@ -104,24 +135,17 @@ jobs:
               break
             fi
             
-            # Check for stalls
-            if [ "$BLOCK_HEIGHT" == "$LAST_HEIGHT" ]; then
-              STALL_COUNT=$((STALL_COUNT + 1))
-              if [ $STALL_COUNT -ge 10 ]; then
-                echo "::warning::Mining appears stalled at height $BLOCK_HEIGHT"
-                echo "Recent logs:"
-                docker logs snapshot-zebra 2>&1 | tail -30
-                STALL_COUNT=0
-              fi
-            else
-              STALL_COUNT=0
+            # Show progress
+            if [ "$BLOCK_HEIGHT" != "$LAST_HEIGHT" ]; then
+              ELAPSED=$(( $(date +%s) - START_TIME ))
+              echo "  Height: $BLOCK_HEIGHT / $MIN_BLOCKS (${ELAPSED}s elapsed)"
+              LAST_HEIGHT=$BLOCK_HEIGHT
             fi
-            LAST_HEIGHT=$BLOCK_HEIGHT
             
-            ELAPSED=$(( $(date +%s) - START_TIME ))
-            echo "  Height: $BLOCK_HEIGHT / $MIN_BLOCKS (${ELAPSED}s elapsed)"
             sleep 30
           done
+          
+          echo "✓ Mining complete - $BLOCK_HEIGHT blocks mined to $MINING_ADDRESS"
 
       - name: Create snapshot
         run: |
@@ -132,6 +156,7 @@ jobs:
           
           # Find and export the volume
           VOLUME_NAME=$(docker volume ls --format '{{.Name}}' | grep zebra-data | head -1)
+          echo "Exporting volume: $VOLUME_NAME"
           
           docker run --rm \
             -v "${VOLUME_NAME}:/data:ro" \
@@ -141,13 +166,30 @@ jobs:
           
           ls -lh fixtures/blockchain-snapshot.tar.gz
           
+          # Also save the mining address for reference
+          echo "$MINING_ADDRESS" > fixtures/mining-address.txt
+          
           docker compose -f /tmp/zebra-only.yml down -v
+
+      - name: Update zebra.toml with deterministic address
+        run: |
+          echo "Committing zebra.toml with deterministic mining address..."
+          
+          # The zebra.toml now has the correct address from the seeded wallet
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          
+          git add docker/configs/zebra.toml fixtures/mining-address.txt
+          git commit -m "chore: update mining address to deterministic wallet address ($MINING_ADDRESS)" || echo "No changes to commit"
+          git push || echo "Push failed - might need manual push"
 
       - name: Upload snapshot artifact
         uses: actions/upload-artifact@v4
         with:
           name: blockchain-snapshot
-          path: fixtures/blockchain-snapshot.tar.gz
+          path: |
+            fixtures/blockchain-snapshot.tar.gz
+            fixtures/mining-address.txt
           retention-days: 90
 
       - name: Create/Update Release
@@ -158,10 +200,16 @@ jobs:
           body: |
             Pre-mined blockchain snapshot with 110+ blocks for instant coinbase maturity.
             
+            Mining address: ${{ env.MINING_ADDRESS }}
+            
             This snapshot is automatically used by the ZecKit GitHub Action for fast CI startup.
+            The mining rewards go to the deterministic faucet wallet address derived from the 
+            standard "abandon...art" BIP-39 test seed.
             
             Generated: ${{ github.event.repository.updated_at }}
-          files: fixtures/blockchain-snapshot.tar.gz
+          files: |
+            fixtures/blockchain-snapshot.tar.gz
+            fixtures/mining-address.txt
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

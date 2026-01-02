@@ -174,17 +174,86 @@ runs:
           sleep 10
         done
         echo "✓ Zebra RPC ready"
+
+    - name: Configure mining to wallet address
+      shell: bash
+      run: |
+        cd $ZECKIT_DIR
         
-        # Wait for minimum blocks (skip long wait if snapshot was restored)
-        echo "Waiting for ${{ inputs.min-blocks }} blocks..."
-        SNAPSHOT_MODE="${{ env.SNAPSHOT_AVAILABLE }}"
-        BLOCK_WAIT_TIMEOUT=$MAX_SECONDS
+        echo "Configuring Zebra to mine to faucet wallet address..."
         
-        # If snapshot was restored, blocks should already be there - use shorter timeout
-        if [ "$SNAPSHOT_MODE" == "true" ]; then
-          echo "Snapshot was restored, blocks should be ready quickly..."
-          BLOCK_WAIT_TIMEOUT=120  # 2 minutes max for snapshot mode
+        # Wait for wallet container to be ready
+        echo "Waiting for wallet container..."
+        WALLET_CONTAINER="zeckit-zingo-wallet"
+        
+        for i in {1..30}; do
+          if docker exec $WALLET_CONTAINER test -d /var/zingo 2>/dev/null; then
+            echo "✓ Wallet container ready"
+            break
+          fi
+          echo "  Waiting for wallet... ($i/30)"
+          sleep 5
+        done
+        
+        # Determine the lightwalletd server based on backend
+        if [[ "${{ inputs.backend }}" == "zaino" ]]; then
+          LWD_SERVER="http://zaino:9067"
+        else
+          LWD_SERVER="http://lightwalletd:9067"
         fi
+        
+        # Get the wallet's transparent address
+        echo "Getting wallet transparent address..."
+        T_ADDR_OUTPUT=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'addresses\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest --nosync" 2>/dev/null || true)
+        
+        echo "Wallet output:"
+        echo "$T_ADDR_OUTPUT"
+        
+        # Extract transparent address (tm... for regtest)
+        T_ADDR=$(echo "$T_ADDR_OUTPUT" | grep -o 'tm[a-zA-Z0-9]*' | head -1)
+        
+        if [ -z "$T_ADDR" ]; then
+          echo "::warning::Could not get transparent address from wallet"
+          echo "Using default mining address from config"
+        else
+          echo "✓ Wallet transparent address: $T_ADDR"
+          
+          # Update zebra.toml with the wallet's address
+          echo "Updating Zebra mining address..."
+          sed -i.bak "s|miner_address = \".*\"|miner_address = \"$T_ADDR\"|" docker/configs/zebra.toml
+          
+          echo "New config:"
+          grep miner_address docker/configs/zebra.toml
+          
+          # Restart Zebra to use the new mining address
+          echo "Restarting Zebra with new mining address..."
+          docker restart zeckit-zebra
+          
+          # Wait for Zebra RPC to be ready again
+          echo "Waiting for Zebra RPC after restart..."
+          sleep 10
+          until curl -sf --max-time 5 \
+            --data-binary '{"jsonrpc":"2.0","id":"1","method":"getinfo","params":[]}' \
+            -H 'content-type: application/json' \
+            http://127.0.0.1:8232 > /dev/null 2>&1; do
+            echo "  Waiting..."
+            sleep 5
+          done
+          echo "✓ Zebra RPC ready with new mining address"
+        fi
+
+    - name: Wait for coinbase maturity
+      shell: bash
+      run: |
+        cd $ZECKIT_DIR
+        
+        SECONDS=0
+        MAX_SECONDS=$(( ${{ inputs.startup-timeout }} * 60 ))
+        SNAPSHOT_MODE="${{ env.SNAPSHOT_AVAILABLE }}"
+        
+        # Wait for minimum blocks
+        echo "Waiting for ${{ inputs.min-blocks }} blocks..."
+        echo "Snapshot mode: $SNAPSHOT_MODE"
         
         while true; do
           BLOCK_HEIGHT=$(curl -sf --max-time 5 \
@@ -193,20 +262,17 @@ runs:
             http://127.0.0.1:8232 | jq -r '.result // 0')
           
           if [ "$BLOCK_HEIGHT" -ge "${{ inputs.min-blocks }}" ]; then
-            echo "✓ Block height: $BLOCK_HEIGHT"
+            echo "✓ Block height: $BLOCK_HEIGHT (coinbase maturity reached)"
             break
           fi
           
-          if [ $SECONDS -ge $BLOCK_WAIT_TIMEOUT ]; then
-            if [ "$SNAPSHOT_MODE" == "true" ]; then
-              echo "::warning::Snapshot was restored but blocks not at expected height. Mining may be in progress."
-            fi
+          if [ $SECONDS -ge $MAX_SECONDS ]; then
             echo "::error::Did not reach ${{ inputs.min-blocks }} blocks within timeout"
             echo "Current height: $BLOCK_HEIGHT, Expected: ${{ inputs.min-blocks }}"
             exit 1
           fi
           
-          echo "Current height: $BLOCK_HEIGHT / ${{ inputs.min-blocks }}"
+          echo "Current height: $BLOCK_HEIGHT / ${{ inputs.min-blocks }} (${SECONDS}s elapsed)"
           sleep 15
         done
         
@@ -240,6 +306,52 @@ runs:
         echo "  Backend:    ${{ inputs.backend }}"
         echo "  Blocks:     $BLOCK_HEIGHT"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    - name: Sync wallet and verify faucet balance
+      shell: bash
+      run: |
+        cd $ZECKIT_DIR
+        
+        echo "Syncing faucet wallet to see mined funds..."
+        
+        WALLET_CONTAINER="zeckit-zingo-wallet"
+        
+        # Determine the lightwalletd server based on backend
+        if [[ "${{ inputs.backend }}" == "zaino" ]]; then
+          LWD_SERVER="http://zaino:9067"
+        else
+          LWD_SERVER="http://lightwalletd:9067"
+        fi
+        
+        # Sync the wallet
+        echo "Running wallet sync..."
+        docker exec $WALLET_CONTAINER bash -c "echo -e 'sync\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" || true
+        
+        sleep 5
+        
+        # Check balance
+        echo "Checking wallet balance..."
+        BALANCE_OUTPUT=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest --nosync" 2>/dev/null || true)
+        
+        echo "Wallet balance output:"
+        echo "$BALANCE_OUTPUT"
+        
+        # Check faucet stats
+        echo ""
+        echo "Faucet stats:"
+        curl -sf http://127.0.0.1:8080/stats || echo "Could not get faucet stats"
+        
+        # Verify faucet has balance
+        FAUCET_BALANCE=$(curl -sf http://127.0.0.1:8080/stats | jq -r '.balance // 0')
+        echo ""
+        echo "Faucet balance: $FAUCET_BALANCE ZEC"
+        
+        if [ "$FAUCET_BALANCE" == "0" ] || [ "$FAUCET_BALANCE" == "0.0" ]; then
+          echo "::warning::Faucet has zero balance - E2E tests may fail"
+          echo "This usually means the mining address doesn't match the wallet address"
+        else
+          echo "✓ Faucet has funds available"
+        fi
 
     - name: Run E2E tests
       id: e2e
