@@ -23,9 +23,11 @@ jobs:
       - name: Start Zebra and mine blocks
         run: |
           echo "Starting Zebra node..."
+          echo "Working directory: $(pwd)"
+          echo "Config file exists: $(ls -la docker/configs/zebra.toml)"
           
-          # Create a minimal compose just for Zebra
-          cat > /tmp/zebra-only.yml << 'EOF'
+          # Create a minimal compose just for Zebra with absolute paths
+          cat > /tmp/zebra-only.yml << EOF
           services:
             zebra:
               image: ghcr.io/xpanvictor/zeckit-zebra:latest
@@ -33,24 +35,51 @@ jobs:
               ports:
                 - "127.0.0.1:8232:8232"
               volumes:
-                - ./docker/configs/zebra.toml:/etc/zebrad/zebrad.toml:ro
+                - $(pwd)/docker/configs/zebra.toml:/etc/zebrad/zebrad.toml:ro
                 - zebra-data:/var/zebra
           volumes:
             zebra-data:
           EOF
           
+          echo "Generated compose file:"
+          cat /tmp/zebra-only.yml
+          
           docker compose -f /tmp/zebra-only.yml up -d
           
-          # Wait for RPC
+          # Give it a few seconds to start then show initial logs
+          sleep 10
+          echo "=== Initial Zebra logs ==="
+          docker logs snapshot-zebra 2>&1 || echo "Failed to get logs"
+          echo "==========================="
+          
+          # Wait for RPC with timeout and periodic log output
           echo "Waiting for Zebra RPC..."
-          until curl -sf --max-time 5 \
+          SECONDS=0
+          MAX_WAIT=300  # 5 minutes max to wait for RPC
+          
+          while ! curl -sf --max-time 5 \
             --data-binary '{"jsonrpc":"2.0","id":"1","method":"getinfo","params":[]}' \
             -H 'content-type: application/json' \
             http://127.0.0.1:8232 > /dev/null 2>&1; do
-            echo "  Waiting..."
+            
+            if [ $SECONDS -ge $MAX_WAIT ]; then
+              echo "::error::Zebra RPC not ready after ${MAX_WAIT}s"
+              echo "=== Final Zebra logs ==="
+              docker logs snapshot-zebra 2>&1 | tail -100
+              echo "==========================="
+              exit 1
+            fi
+            
+            # Show logs every minute
+            if [ $((SECONDS % 60)) -lt 5 ]; then
+              echo "  Still waiting... (${SECONDS}s) - Container status:"
+              docker ps -a | grep zebra || true
+            fi
+            
+            echo "  Waiting... (${SECONDS}s)"
             sleep 5
           done
-          echo "✓ Zebra RPC ready"
+          echo "✓ Zebra RPC ready after ${SECONDS}s"
           
           # Show initial logs to confirm mining is active
           echo "Initial Zebra logs:"
