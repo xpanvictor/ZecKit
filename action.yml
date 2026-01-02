@@ -120,8 +120,18 @@ runs:
         echo "Restoring pre-mined blockchain snapshot..."
         
         # Get the project name that docker compose will use
-        PROJECT_NAME=$(basename "$ZECKIT_DIR" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
+        # Docker Compose uses the directory name, lowercased, with special chars removed
+        DIR_NAME=$(basename "$ZECKIT_DIR")
+        echo "Directory name: $DIR_NAME"
+        PROJECT_NAME=$(echo "$DIR_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
+        
+        # Fallback if empty
+        if [ -z "$PROJECT_NAME" ]; then
+          PROJECT_NAME="zeckit"
+        fi
+        
         VOLUME_NAME="${PROJECT_NAME}_zebra-data"
+        echo "Using volume name: $VOLUME_NAME"
         
         echo "Creating volume: $VOLUME_NAME"
         docker volume create "$VOLUME_NAME" || true
