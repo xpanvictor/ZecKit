@@ -147,13 +147,22 @@ test_fund_ua() {
     fi
     
     log_info "Requesting $TEST_AMOUNT ZEC from faucet..."
+    log_info "Address: ${TEST_UA:0:50}..."
     
-    local response=$(curl -sf -X POST "$FAUCET_API/request" \
+    # Get response with error handling
+    local http_code
+    local response
+    response=$(curl -s -w "\n%{http_code}" -X POST "$FAUCET_API/request" \
         -H "Content-Type: application/json" \
-        -d "{\"address\": \"$TEST_UA\", \"amount\": $TEST_AMOUNT}" 2>/dev/null)
+        -d "{\"address\": \"$TEST_UA\", \"amount\": $TEST_AMOUNT}")
     
-    if [ $? -ne 0 ]; then
-        log_fail "Faucet request failed"
+    http_code=$(echo "$response" | tail -1)
+    response=$(echo "$response" | sed '$d')
+    
+    log_info "HTTP response code: $http_code"
+    
+    if [ "$http_code" != "200" ]; then
+        log_fail "Faucet request failed (HTTP $http_code): $response"
         return 1
     fi
     
@@ -189,9 +198,10 @@ test_autoshield() {
     log_info "Checking transparent balance..."
     local balance_output=$(zingo_cmd "balance" "true")
     
-    local transparent_balance=$(echo "$balance_output" | grep -o 'confirmed_transparent_balance:[[:space:]]*[0-9_]*' | grep -o '[0-9_]*$' | tr -d '_')
+    local transparent_balance=$(echo "$balance_output" | grep 'confirmed_transparent_balance' | head -1 | sed 's/[^0-9]//g')
+    transparent_balance=${transparent_balance:-0}
     
-    if [ -z "$transparent_balance" ] || [ "$transparent_balance" -eq 0 ]; then
+    if [ "$transparent_balance" -eq 0 ]; then
         log_warn "No transparent balance to shield (might already be shielded)"
         # This is OK - funds might have been auto-shielded
         log_pass "Autoshield check complete (no transparent funds)"
@@ -242,11 +252,12 @@ test_shielded_send() {
     
     # Check Orchard balance
     local balance_output=$(zingo_cmd "balance" "true")
-    local orchard_balance=$(echo "$balance_output" | grep -o 'confirmed_orchard_balance:[[:space:]]*[0-9_]*' | grep -o '[0-9_]*$' | tr -d '_')
+    local orchard_balance=$(echo "$balance_output" | grep 'confirmed_orchard_balance' | head -1 | sed 's/[^0-9]//g')
+    orchard_balance=${orchard_balance:-0}
     
-    log_info "Orchard balance: ${orchard_balance:-0} zatoshi"
+    log_info "Orchard balance: $orchard_balance zatoshi"
     
-    if [ -z "$orchard_balance" ] || [ "$orchard_balance" -lt 10000000 ]; then
+    if [ "$orchard_balance" -lt 10000000 ]; then
         log_warn "Insufficient Orchard balance for send test"
         log_pass "Shielded send skipped (insufficient balance)"
         return 0
@@ -308,16 +319,21 @@ test_verify_balances() {
     echo "$balance_output"
     echo ""
     
-    # Parse balances
-    local transparent=$(echo "$balance_output" | grep -o 'confirmed_transparent_balance:[[:space:]]*[0-9_]*' | grep -o '[0-9_]*$' | tr -d '_')
-    local sapling=$(echo "$balance_output" | grep -o 'confirmed_sapling_balance:[[:space:]]*[0-9_]*' | grep -o '[0-9_]*$' | tr -d '_')
-    local orchard=$(echo "$balance_output" | grep -o 'confirmed_orchard_balance:[[:space:]]*[0-9_]*' | grep -o '[0-9_]*$' | tr -d '_')
+    # Parse balances - handle zingo-cli's format
+    local transparent=$(echo "$balance_output" | grep 'confirmed_transparent_balance' | head -1 | sed 's/[^0-9]//g')
+    local sapling=$(echo "$balance_output" | grep 'confirmed_sapling_balance' | head -1 | sed 's/[^0-9]//g')
+    local orchard=$(echo "$balance_output" | grep 'confirmed_orchard_balance' | head -1 | sed 's/[^0-9]//g')
     
-    log_info "Transparent: ${transparent:-0} zatoshi"
-    log_info "Sapling:     ${sapling:-0} zatoshi"
-    log_info "Orchard:     ${orchard:-0} zatoshi"
+    # Default to 0 if empty
+    transparent=${transparent:-0}
+    sapling=${sapling:-0}
+    orchard=${orchard:-0}
     
-    local total=$((${transparent:-0} + ${sapling:-0} + ${orchard:-0}))
+    log_info "Transparent: $transparent zatoshi"
+    log_info "Sapling:     $sapling zatoshi"
+    log_info "Orchard:     $orchard zatoshi"
+    
+    local total=$((transparent + sapling + orchard))
     
     if [ "$total" -gt 0 ]; then
         log_pass "Wallet has funds: $total zatoshi total"

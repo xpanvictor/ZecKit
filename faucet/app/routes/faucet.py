@@ -14,16 +14,17 @@ def validate_address(address: str) -> tuple:
         return False, "Address is required"
     
     # Transparent: t1 or t3 (mainnet), tm (testnet/regtest)
-    # Shielded Sapling: zs1
-    # Unified: u1
+    # Shielded Sapling: zs1 (mainnet), zsregtest/zstestnet (regtest/testnet)
+    # Unified: u1 (mainnet), uregtest1/utestnet1 (regtest/testnet)
     
     if address.startswith('t'):
         if not re.match(r'^t[13m][a-zA-Z0-9]{33}$', address):
             return False, "Invalid transparent address format"
-    elif address.startswith('zs1'):
-        if len(address) < 78:
+    elif address.startswith('zs'):
+        if len(address) < 70:
             return False, "Invalid sapling address format"
-    elif address.startswith('u1'):
+    elif address.startswith('u'):
+        # u1 for mainnet, uregtest1 for regtest, utestnet1 for testnet
         if len(address) < 100:
             return False, "Invalid unified address format"
     else:

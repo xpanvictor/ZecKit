@@ -302,7 +302,7 @@ runs:
       if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: zeckit-logs-${{ github.run_number }}
+        name: zeckit-logs-${{ inputs.backend }}-${{ github.run_number }}
         path: /tmp/zeckit-logs/
         retention-days: 7
 
