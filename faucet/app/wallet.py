@@ -143,7 +143,8 @@ class ZingoWallet:
             return None
     
     def send_to_address(self, to_address: str, amount: float, memo: str = None):
-        """Send using pexpect for proper interactive handling"""
+        """Send using pexpect for proper interactive handling.
+        Auto-shields transparent funds to Orchard if needed."""
         try:
             amount_sats = int(amount * 100_000_000)
             wallet_container = os.getenv('WALLET_CONTAINER', 'zeckit-zingo-wallet')
@@ -197,20 +198,74 @@ class ZingoWallet:
             # Wait for prompt again
             child.expect(r'\(test\) Block:\d+', timeout=15)
             
-            # Check spendable balance
-            print("💰 Checking spendable balance...")
-            child.sendline('spendable_balance')
-            child.expect(r'"spendable_balance":\s*(\d+)', timeout=15)
+            # Check balances - both transparent and Orchard
+            print("💰 Checking balances...")
+            child.sendline('balance')
+            child.expect(r'\(test\) Block:\d+', timeout=15)
             
-            spendable_sats = int(child.match.group(1))
+            balance_output = child.before
+            print(f"Balance output: {balance_output[:500]}")
+            
+            # Parse transparent balance
+            transparent_match = re.search(r'confirmed_transparent_balance:\s*(\d+)', balance_output)
+            transparent_sats = int(transparent_match.group(1)) if transparent_match else 0
+            
+            # Parse Orchard balance  
+            orchard_match = re.search(r'confirmed_orchard_balance:\s*(\d+)', balance_output)
+            orchard_sats = int(orchard_match.group(1)) if orchard_match else 0
+            
+            print(f"💰 Transparent: {transparent_sats / 100_000_000} ZEC, Orchard: {orchard_sats / 100_000_000} ZEC")
+            
+            required_sats = amount_sats + 20000  # Amount + fee buffer
+            
+            # If transparent has funds but Orchard doesn't, auto-shield first
+            if transparent_sats >= required_sats and orchard_sats < required_sats:
+                print("🔒 Auto-shielding transparent funds to Orchard...")
+                child.sendline('shield')
+                
+                # Wait for shield response
+                index = child.expect([
+                    r'txid',
+                    r'"txids"',
+                    r'error',
+                    pexpect.TIMEOUT
+                ], timeout=60)
+                
+                if index in [0, 1]:
+                    print("✅ Shield transaction submitted")
+                    # Wait for prompt
+                    child.expect(r'\(test\) Block:\d+', timeout=15)
+                    
+                    # Need to wait for the shield tx to be mined
+                    print("⏳ Waiting for shield transaction to be mined (60s)...")
+                    time.sleep(60)
+                    
+                    # Sync again to see shielded balance
+                    print("🔄 Syncing after shield...")
+                    child.sendline('sync')
+                    child.expect([r'Sync completed', r'error', pexpect.TIMEOUT], timeout=60)
+                    child.expect(r'\(test\) Block:\d+', timeout=15)
+                else:
+                    print("⚠️  Shield failed or timed out, trying to send anyway")
+                    child.expect(r'\(test\) Block:\d+', timeout=15)
+            
+            # Now check spendable Orchard balance
+            print("💰 Checking spendable Orchard balance...")
+            child.sendline('spendable_balance')
+            
+            try:
+                child.expect(r'"spendable_balance":\s*(\d+)', timeout=15)
+                spendable_sats = int(child.match.group(1))
+            except:
+                spendable_sats = 0
+                
             print(f"💰 Spendable Orchard: {spendable_sats / 100_000_000} ZEC")
             
             # Check if sufficient
-            required_sats = amount_sats + 20000
             if spendable_sats < required_sats:
                 child.sendline('quit')
                 child.close()
-                raise Exception(f"Insufficient Orchard balance: need {required_sats / 100_000_000} ZEC, have {spendable_sats / 100_000_000} ZEC")
+                raise Exception(f"Insufficient spendable Orchard balance: need {required_sats / 100_000_000} ZEC, have {spendable_sats / 100_000_000} ZEC. Transparent: {transparent_sats / 100_000_000} ZEC")
             
             print(f"✅ Sufficient funds")
             
