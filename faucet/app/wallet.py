@@ -218,36 +218,18 @@ class ZingoWallet:
             
             required_sats = amount_sats + 20000  # Amount + fee buffer
             
-            # If transparent has funds but Orchard doesn't, auto-shield first
-            if transparent_sats >= required_sats and orchard_sats < required_sats:
-                print("🔒 Auto-shielding transparent funds to Orchard...")
-                child.sendline('shield')
-                
-                # Wait for shield response
-                index = child.expect([
-                    r'txid',
-                    r'"txids"',
-                    r'error',
-                    pexpect.TIMEOUT
-                ], timeout=60)
-                
-                if index in [0, 1]:
-                    print("✅ Shield transaction submitted")
-                    # Wait for prompt
-                    child.expect(r'\(test\) Block:\d+', timeout=15)
-                    
-                    # Need to wait for the shield tx to be mined
-                    print("⏳ Waiting for shield transaction to be mined (60s)...")
-                    time.sleep(60)
-                    
-                    # Sync again to see shielded balance
-                    print("🔄 Syncing after shield...")
-                    child.sendline('sync')
-                    child.expect([r'Sync completed', r'error', pexpect.TIMEOUT], timeout=60)
-                    child.expect(r'\(test\) Block:\d+', timeout=15)
+            # If Orchard has insufficient funds but transparent does, suggest shielding
+            if orchard_sats < required_sats:
+                if transparent_sats >= required_sats:
+                    child.sendline('quit')
+                    child.close()
+                    raise Exception(f"Insufficient Orchard balance ({orchard_sats / 100_000_000} ZEC). "
+                                  f"Transparent has {transparent_sats / 100_000_000} ZEC - please shield funds first with 'shield' command")
                 else:
-                    print("⚠️  Shield failed or timed out, trying to send anyway")
-                    child.expect(r'\(test\) Block:\d+', timeout=15)
+                    child.sendline('quit')
+                    child.close()
+                    raise Exception(f"Insufficient balance: need {required_sats / 100_000_000} ZEC, "
+                                  f"have {orchard_sats / 100_000_000} ZEC Orchard + {transparent_sats / 100_000_000} ZEC transparent")
             
             # Now check spendable Orchard balance
             print("💰 Checking spendable Orchard balance...")

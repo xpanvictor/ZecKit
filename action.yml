@@ -388,15 +388,18 @@ runs:
         echo "Faucet stats:"
         curl -sf http://127.0.0.1:8080/stats || echo "Could not get faucet stats"
         
-        # Verify faucet has balance
+        # Verify faucet has balance - check Orchard specifically since that's what the faucet sends from
         FAUCET_BALANCE=$(curl -sf http://127.0.0.1:8080/stats | jq -r '.current_balance // 0')
+        ORCHARD_BALANCE=$(curl -sf http://127.0.0.1:8080/stats | jq -r '.orchard_balance // 0')
         TRANSPARENT_BALANCE=$(curl -sf http://127.0.0.1:8080/stats | jq -r '.transparent_balance // 0')
         echo ""
-        echo "Faucet balance: $FAUCET_BALANCE ZEC (transparent: $TRANSPARENT_BALANCE ZEC)"
+        echo "Faucet balance: $FAUCET_BALANCE ZEC (orchard: $ORCHARD_BALANCE, transparent: $TRANSPARENT_BALANCE)"
         
-        if [ "$FAUCET_BALANCE" == "0" ] || [ "$FAUCET_BALANCE" == "0.0" ]; then
+        # Faucet sends from Orchard, so we need to shield transparent funds first
+        if [ "$ORCHARD_BALANCE" == "0" ] || [ "$ORCHARD_BALANCE" == "0.0" ]; then
           if [ "$TRANSPARENT_BALANCE" != "0" ] && [ "$TRANSPARENT_BALANCE" != "0.0" ]; then
-            echo "✓ Faucet has transparent funds: $TRANSPARENT_BALANCE ZEC"
+            echo "⚠ No Orchard balance - need to shield transparent funds first"
+            echo "  Transparent available: $TRANSPARENT_BALANCE ZEC"
             echo "  Auto-shielding transparent funds to Orchard for faucet..."
             
             # Shield transparent funds to Orchard
@@ -406,18 +409,33 @@ runs:
             sleep 90
             
             # Sync wallet to see shielded balance
-            docker exec $WALLET_CONTAINER bash -c "echo -e 'sync run\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" || true
+            echo "  Syncing wallet after shield..."
+            for i in {1..3}; do
+              SYNC_OUT=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'sync run\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" 2>&1 || true)
+              if echo "$SYNC_OUT" | grep -q "already running"; then
+                sleep 20
+              else
+                break
+              fi
+            done
             sleep 5
             
             # Check new balance
             NEW_BALANCE=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest --nosync" 2>/dev/null | grep confirmed_orchard_balance | head -1 | sed 's/[^0-9]//g')
+            NEW_BALANCE=${NEW_BALANCE:-0}
             echo "  Orchard balance after shield: $((NEW_BALANCE / 100000000)) ZEC"
+            
+            if [ "$NEW_BALANCE" -gt 0 ]; then
+              echo "✓ Successfully shielded funds to Orchard"
+            else
+              echo "::warning::Shield may not have completed yet - E2E tests may need to wait"
+            fi
           else
-            echo "::warning::Faucet has zero balance - E2E tests may fail"
+            echo "::warning::Faucet has zero balance in all pools - E2E tests may fail"
             echo "This usually means the mining address doesn't match the wallet address"
           fi
         else
-          echo "✓ Faucet has funds available"
+          echo "✓ Faucet has Orchard funds available: $ORCHARD_BALANCE ZEC"
         fi
 
     - name: Run E2E tests
