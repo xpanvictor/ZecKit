@@ -48,17 +48,19 @@ if [ ! -f "/var/zingo/zingo-wallet.dat" ]; then
     # Standard BIP-39 test mnemonic (24 words)
     FAUCET_SEED="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art"
     
-    # Initialize wallet with seed using the restore command
+    # Initialize wallet with seed using --seed command line argument
     # Birthday height 0 means scan from genesis
+    # The --seed flag creates/restores a wallet from the given seed phrase
     zingo-cli --data-dir /var/zingo \
               --server ${BACKEND_URI} \
               --chain regtest \
-              --nosync << EOF
-restore "${FAUCET_SEED}" 0
+              --seed "${FAUCET_SEED}" \
+              --birthday 0 \
+              --nosync << 'EOF'
 quit
 EOF
     
-    echo "✅ Wallet restored from seed!"
+    echo "✅ Wallet created from seed!"
     
     # Get wallet's unified address
     WALLET_ADDRESS=$(zingo-cli --data-dir /var/zingo \
