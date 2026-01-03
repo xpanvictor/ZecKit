@@ -290,6 +290,23 @@ runs:
           sleep 15
         done
         
+        # Sync the wallet to see the mined funds
+        echo "Syncing wallet to see mined funds..."
+        WALLET_CONTAINER="zeckit-zingo-wallet"
+        if [[ "${{ inputs.backend }}" == "zaino" ]]; then
+          LWD_SERVER="http://zaino:9067"
+        else
+          LWD_SERVER="http://lightwalletd:9067"
+        fi
+        
+        docker exec $WALLET_CONTAINER bash -c "echo -e 'sync\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" || true
+        sleep 5
+        
+        # Verify wallet balance
+        echo "Checking wallet balance..."
+        BALANCE_OUTPUT=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest --nosync" 2>/dev/null || true)
+        echo "$BALANCE_OUTPUT" | grep -E "balance|Balance" || echo "Balance check output: $BALANCE_OUTPUT"
+        
         # Wait for faucet
         echo "Waiting for faucet API..."
         until curl -sf http://127.0.0.1:8080/health > /dev/null 2>&1; do
