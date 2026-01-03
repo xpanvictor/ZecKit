@@ -192,7 +192,7 @@ test_autoshield() {
     
     # Sync wallet first
     log_info "Syncing wallet..."
-    zingo_cmd "sync" "false" > /dev/null 2>&1
+    zingo_cmd "sync run" "false" > /dev/null 2>&1
     
     # Check transparent balance
     log_info "Checking transparent balance..."
@@ -237,7 +237,7 @@ test_shielded_send() {
     
     # Sync wallet
     log_info "Syncing wallet..."
-    zingo_cmd "sync" "false" > /dev/null 2>&1
+    zingo_cmd "sync run" "false" > /dev/null 2>&1
     
     # Get a destination address (use faucet's address)
     log_info "Getting destination address..."
@@ -299,7 +299,7 @@ test_rescan_sync() {
     
     # Sync after rescan
     log_info "Syncing wallet..."
-    zingo_cmd "sync" "false" > /dev/null 2>&1
+    zingo_cmd "sync run" "false" > /dev/null 2>&1
     
     log_pass "Rescan/sync complete"
     return 0

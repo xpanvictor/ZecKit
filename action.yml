@@ -299,7 +299,7 @@ runs:
           LWD_SERVER="http://lightwalletd:9067"
         fi
         
-        docker exec $WALLET_CONTAINER bash -c "echo -e 'sync\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" || true
+        docker exec $WALLET_CONTAINER bash -c "echo -e 'sync run\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" || true
         sleep 5
         
         # Verify wallet balance
@@ -356,7 +356,7 @@ runs:
         
         # Sync the wallet
         echo "Running wallet sync..."
-        docker exec $WALLET_CONTAINER bash -c "echo -e 'sync\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" || true
+        docker exec $WALLET_CONTAINER bash -c "echo -e 'sync run\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" || true
         
         sleep 5
         
