@@ -68,11 +68,16 @@ def request_funds():
     if not wallet:
         return jsonify({"error": "Faucet wallet not available"}), 503
     
-    # Check balance
+    # Check balance - use transparent balance since mining rewards are transparent
     balance = wallet.get_balance()
-    if balance < amount:
+    transparent_balance = wallet.get_transparent_balance()
+    available_balance = max(balance, transparent_balance)  # Use highest available
+    
+    print(f"💰 Balance check: total={balance}, transparent={transparent_balance}, available={available_balance}")
+    
+    if available_balance < amount:
         return jsonify({
-            "error": f"Insufficient faucet balance (available: {balance} ZEC)"
+            "error": f"Insufficient faucet balance (available: {available_balance} ZEC, transparent: {transparent_balance} ZEC)"
         }), 503
     
     # Send REAL transaction

@@ -373,13 +373,18 @@ runs:
         curl -sf http://127.0.0.1:8080/stats || echo "Could not get faucet stats"
         
         # Verify faucet has balance
-        FAUCET_BALANCE=$(curl -sf http://127.0.0.1:8080/stats | jq -r '.balance // 0')
+        FAUCET_BALANCE=$(curl -sf http://127.0.0.1:8080/stats | jq -r '.current_balance // 0')
+        TRANSPARENT_BALANCE=$(curl -sf http://127.0.0.1:8080/stats | jq -r '.transparent_balance // 0')
         echo ""
-        echo "Faucet balance: $FAUCET_BALANCE ZEC"
+        echo "Faucet balance: $FAUCET_BALANCE ZEC (transparent: $TRANSPARENT_BALANCE ZEC)"
         
         if [ "$FAUCET_BALANCE" == "0" ] || [ "$FAUCET_BALANCE" == "0.0" ]; then
-          echo "::warning::Faucet has zero balance - E2E tests may fail"
-          echo "This usually means the mining address doesn't match the wallet address"
+          if [ "$TRANSPARENT_BALANCE" != "0" ] && [ "$TRANSPARENT_BALANCE" != "0.0" ]; then
+            echo "✓ Faucet has transparent funds: $TRANSPARENT_BALANCE ZEC"
+          else
+            echo "::warning::Faucet has zero balance - E2E tests may fail"
+            echo "This usually means the mining address doesn't match the wallet address"
+          fi
         else
           echo "✓ Faucet has funds available"
         fi

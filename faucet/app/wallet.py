@@ -59,23 +59,34 @@ class ZingoWallet:
             
             if isinstance(result, dict) and 'output' in result:
                 output = result['output']
+                print(f"📊 Balance output (first 500 chars): {output[:500]}")
                 
                 patterns = [
-                    r'confirmed_transparent_balance:\s*([\d_]+)',
-                    r'confirmed_sapling_balance:\s*([\d_]+)',
-                    r'confirmed_orchard_balance:\s*([\d_]+)'
+                    ('transparent', r'confirmed_transparent_balance:\s*([\d_]+)'),
+                    ('sapling', r'confirmed_sapling_balance:\s*([\d_]+)'),
+                    ('orchard', r'confirmed_orchard_balance:\s*([\d_]+)')
                 ]
                 
-                for pattern in patterns:
+                for pool_name, pattern in patterns:
                     match = re.search(pattern, output)
                     if match:
                         balance_str = match.group(1).replace('_', '')
-                        total_zatoshis += int(balance_str)
+                        zatoshis = int(balance_str)
+                        total_zatoshis += zatoshis
+                        print(f"  💰 {pool_name}: {zatoshis} zatoshi ({zatoshis / 100_000_000} ZEC)")
+                    else:
+                        print(f"  ⚠️ {pool_name}: pattern not found")
+            else:
+                print(f"❌ Unexpected result format: {type(result)}")
             
-            return total_zatoshis / 100_000_000
+            zec_balance = total_zatoshis / 100_000_000
+            print(f"📊 Total balance: {zec_balance} ZEC")
+            return zec_balance
             
         except Exception as e:
             print(f"❌ Error getting balance: {e}")
+            import traceback
+            traceback.print_exc()
             return 0.0
     
     def get_orchard_balance(self):
@@ -307,9 +318,32 @@ class ZingoWallet:
     def get_stats(self):
         """Get wallet statistics with pool breakdown"""
         try:
-            balance_total = self.get_balance()
-            orchard_balance = self.get_orchard_balance()
-            transparent_balance = self.get_transparent_balance()
+            # Get all balances in one call to avoid timing issues
+            transparent_balance = 0.0
+            orchard_balance = 0.0
+            sapling_balance = 0.0
+            
+            result = self._run_zingo_cmd("balance", nosync=False)
+            
+            if isinstance(result, dict) and 'output' in result:
+                output = result['output']
+                
+                # Parse transparent
+                match = re.search(r'confirmed_transparent_balance:\s*([\d_]+)', output)
+                if match:
+                    transparent_balance = int(match.group(1).replace('_', '')) / 100_000_000
+                
+                # Parse orchard
+                match = re.search(r'confirmed_orchard_balance:\s*([\d_]+)', output)
+                if match:
+                    orchard_balance = int(match.group(1).replace('_', '')) / 100_000_000
+                    
+                # Parse sapling
+                match = re.search(r'confirmed_sapling_balance:\s*([\d_]+)', output)
+                if match:
+                    sapling_balance = int(match.group(1).replace('_', '')) / 100_000_000
+            
+            balance_total = transparent_balance + orchard_balance + sapling_balance
             address = self.get_address()
             history = self.get_transaction_history(limit=10)
             
@@ -317,6 +351,7 @@ class ZingoWallet:
                 "balance": balance_total,
                 "orchard_balance": orchard_balance,
                 "transparent_balance": transparent_balance,
+                "sapling_balance": sapling_balance,
                 "address": address,
                 "transactions_count": len(history),
                 "recent_transactions": history[-5:] if history else []
@@ -327,6 +362,7 @@ class ZingoWallet:
                 "balance": 0.0,
                 "orchard_balance": 0.0,
                 "transparent_balance": 0.0,
+                "sapling_balance": 0.0,
                 "address": None,
                 "transactions_count": 0,
                 "recent_transactions": []

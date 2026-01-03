@@ -167,9 +167,9 @@ test_fund_ua() {
     fi
     
     local txid=$(echo "$response" | jq -r '.txid // empty')
-    local status=$(echo "$response" | jq -r '.status // empty')
+    local success=$(echo "$response" | jq -r '.success // false')
     
-    if [ -n "$txid" ] && [ "$status" = "sent" ]; then
+    if [ -n "$txid" ] && [ "$success" = "true" ]; then
         log_pass "Funded UA with $TEST_AMOUNT ZEC (txid: ${txid:0:16}...)"
         FUND_TXID=$txid
         

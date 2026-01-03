@@ -47,9 +47,10 @@ def get_stats():
 
     return jsonify({
         "faucet_address": wallet_stats.get('address', 'N/A'),
-        "current_balance": wallet_stats.get('balance', 0.0),
+        "current_balance": max(wallet_stats.get('balance', 0.0), wallet_stats.get('transparent_balance', 0.0)),
         "orchard_balance": wallet_stats.get('orchard_balance', 0.0),
         "transparent_balance": wallet_stats.get('transparent_balance', 0.0),
+        "sapling_balance": wallet_stats.get('sapling_balance', 0.0),
         "total_requests": wallet_stats.get('transactions_count', 0),
         "total_sent": total_sent,
         "last_request": last_request,
@@ -57,7 +58,7 @@ def get_stats():
         "uptime_seconds": int(uptime_seconds),
         "transaction_mode": "REAL_BLOCKCHAIN",
         "wallet_backend": "zingo-cli",
-        "version": "0.2.0"
+        "version": "0.2.1"
     }), 200
 
 
