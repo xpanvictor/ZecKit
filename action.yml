@@ -202,11 +202,25 @@ runs:
           LWD_SERVER="http://lightwalletd:9067"
         fi
         
-        # Get the wallet's transparent address
-        echo "Getting wallet transparent address..."
-        T_ADDR_OUTPUT=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'addresses\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest --nosync" 2>/dev/null || true)
+        # Wait for wallet to be fully initialized (including transparent address)
+        echo "Waiting for wallet to finish initialization..."
+        sleep 15
         
-        echo "Wallet output:"
+        # First check if wallet has transparent addresses, if not generate one
+        echo "Checking for transparent addresses..."
+        T_CHECK=$(docker exec $WALLET_CONTAINER bash -c "echo -e 't_addresses\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest --nosync" 2>/dev/null || true)
+        
+        if ! echo "$T_CHECK" | grep -q 'tm'; then
+          echo "No transparent address found, generating one..."
+          docker exec $WALLET_CONTAINER bash -c "echo -e 'new_taddress_allow_gap\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest --nosync" || true
+          sleep 5
+        fi
+        
+        # Get the wallet's transparent address using t_addresses command
+        echo "Getting wallet transparent address..."
+        T_ADDR_OUTPUT=$(docker exec $WALLET_CONTAINER bash -c "echo -e 't_addresses\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest --nosync" 2>/dev/null || true)
+        
+        echo "Wallet t_addresses output:"
         echo "$T_ADDR_OUTPUT"
         
         # Extract transparent address (tm... for regtest)

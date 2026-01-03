@@ -51,14 +51,13 @@ if [ ! -f "/var/zingo/zingo-wallet.dat" ]; then
     # Initialize wallet with seed using --seed command line argument
     # Birthday height 0 means scan from genesis
     # The --seed flag creates/restores a wallet from the given seed phrase
-    zingo-cli --data-dir /var/zingo \
+    # Run in non-interactive mode by piping 'quit' directly
+    echo "quit" | zingo-cli --data-dir /var/zingo \
               --server ${BACKEND_URI} \
               --chain regtest \
               --seed "${FAUCET_SEED}" \
               --birthday 0 \
-              --nosync << 'EOF'
-quit
-EOF
+              --nosync
     
     echo "✅ Wallet created from seed!"
     
