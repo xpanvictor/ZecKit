@@ -354,27 +354,38 @@ runs:
           LWD_SERVER="http://lightwalletd:9067"
         fi
         
-        # Function to sync wallet with retries
-        sync_wallet() {
-          echo "Running wallet sync..."
-          for i in {1..3}; do
-            SYNC_OUTPUT=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'sync run\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" 2>&1 || true)
+        # Function to sync wallet and wait for completion
+        sync_wallet_and_wait() {
+          echo "Starting wallet sync..."
+          
+          # Start sync
+          docker exec $WALLET_CONTAINER bash -c "echo -e 'sync run\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" 2>&1 || true
+          
+          # Wait for sync to complete by checking syncstatus
+          echo "Waiting for sync to complete..."
+          for i in {1..60}; do
+            SYNC_STATUS=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'syncstatus\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest --nosync" 2>/dev/null || echo "checking")
             
-            if echo "$SYNC_OUTPUT" | grep -q "sync is already running"; then
-              echo "  Sync already running, waiting 30s for completion..."
-              sleep 30
-            elif echo "$SYNC_OUTPUT" | grep -qi "error"; then
-              echo "  Sync error, retrying..."
-              sleep 5
-            else
-              echo "  Sync completed"
+            if echo "$SYNC_STATUS" | grep -qi "synced\|in_progress.*false\|\"syncing\":.*false"; then
+              echo "  ✓ Sync completed after ${i}0 seconds"
               return 0
             fi
+            
+            # Check if sync shows real progress
+            WALLET_HEIGHT=$(echo "$SYNC_STATUS" | grep -o '"wallet_height":\s*[0-9]*' | grep -o '[0-9]*' || echo "0")
+            CHAIN_HEIGHT=$(echo "$SYNC_STATUS" | grep -o '"target_height":\s*[0-9]*' | grep -o '[0-9]*' || echo "0")
+            
+            if [ -n "$WALLET_HEIGHT" ] && [ -n "$CHAIN_HEIGHT" ] && [ "$WALLET_HEIGHT" -gt 0 ]; then
+              echo "  Syncing: wallet=$WALLET_HEIGHT chain=$CHAIN_HEIGHT"
+            fi
+            
+            sleep 10
           done
+          
+          echo "  Sync timeout, continuing anyway..."
         }
         
-        sync_wallet
-        sleep 10
+        sync_wallet_and_wait
         
         # Check balance
         echo "Checking wallet balance..."

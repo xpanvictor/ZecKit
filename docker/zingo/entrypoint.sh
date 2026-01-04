@@ -134,16 +134,9 @@ EOF
     fi
 fi
 
-# Sync wallet (ignore errors if no blocks yet)
-echo "🔄 Syncing wallet (will complete after blocks are mined)..."
-zingo-cli --data-dir /var/zingo \
-          --server ${BACKEND_URI} \
-          --chain regtest << 'EOF' || true
-sync run
-quit
-EOF
-
-echo "✅ Wallet is ready! (Sync will complete after mining blocks)"
+# Don't start sync here - let the GitHub Action control syncing
+# This avoids "sync is already running" errors
+echo "✅ Wallet is ready! (Action will sync after mining blocks)"
 
 # Keep container running
 tail -f /dev/null
