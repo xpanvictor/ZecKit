@@ -175,7 +175,7 @@ class ZingoWallet:
             
             # Run sync and wait for completion
             print("🔄 Running sync...")
-            child.sendline('sync')
+            child.sendline('sync run')
             
             # Wait for "Sync completed successfully" or error
             index = child.expect([
