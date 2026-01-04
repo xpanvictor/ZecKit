@@ -421,22 +421,29 @@ runs:
             
             # Ensure wallet is fully synced before shielding (not just balance visible)
             echo "  Ensuring wallet is fully synced for shielding..."
+            
+            # First, run a proper sync and wait for it
+            echo "  Running sync..."
+            docker exec $WALLET_CONTAINER bash -c "echo -e 'sync run\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" 2>&1 || true
+            
+            # Wait for sync to complete by checking if balance becomes spendable
             for i in {1..30}; do
-              # Run sync and check spendable balance
-              SYNC_SHIELD=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'sync\nspendable_t_balance\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" 2>&1 || true)
+              # Check spendable balance (use --nosync since we already synced)
+              BALANCE_CHECK=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest --nosync" 2>/dev/null || echo "")
               
-              SPENDABLE=$(echo "$SYNC_SHIELD" | grep -o '"spendable_t_balance":\s*[0-9]*' | grep -o '[0-9]*' | head -1 || echo "0")
-              SPENDABLE=${SPENDABLE:-0}
+              # Parse confirmed transparent balance (if > 0, it should be spendable after sync)
+              CONFIRMED=$(echo "$BALANCE_CHECK" | grep 'confirmed_transparent_balance' | sed 's/[^0-9]//g' || echo "0")
+              CONFIRMED=${CONFIRMED:-0}
               
-              if [ "$SPENDABLE" -gt 0 ]; then
-                echo "  ✓ Spendable transparent balance: $SPENDABLE zatoshi"
+              if [ "$CONFIRMED" -gt 0 ]; then
+                echo "  ✓ Confirmed transparent balance: $CONFIRMED zatoshi"
                 break
               fi
               
               if [ $i -eq 30 ]; then
-                echo "  ⚠ Could not verify spendable balance after 300s"
+                echo "  ⚠ Could not verify balance after 300s"
               else
-                echo "  Waiting for spendable balance... ($((i * 10))s)"
+                echo "  Waiting for balance... ($((i * 10))s)"
                 sleep 10
               fi
             done
@@ -455,7 +462,7 @@ runs:
               
               # Sync wallet to see shielded balance
               echo "  Syncing wallet after shield..."
-              docker exec $WALLET_CONTAINER bash -c "echo -e 'sync\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" 2>&1 || true
+              docker exec $WALLET_CONTAINER bash -c "echo -e 'sync run\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" 2>&1 || true
               sleep 10
               
               # Check new balance
