@@ -358,31 +358,38 @@ runs:
         sync_wallet_and_wait() {
           echo "Starting wallet sync..."
           
-          # Start sync
-          docker exec $WALLET_CONTAINER bash -c "echo -e 'sync run\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" 2>&1 || true
+          # Try to start sync (may already be running from old entrypoint)
+          SYNC_START=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'sync run\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" 2>&1 || true)
           
-          # Wait for sync to complete by checking syncstatus
-          echo "Waiting for sync to complete..."
-          for i in {1..60}; do
-            SYNC_STATUS=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'syncstatus\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest --nosync" 2>/dev/null || echo "checking")
+          if echo "$SYNC_START" | grep -q "already running"; then
+            echo "  Sync already running, will wait for completion..."
+          fi
+          
+          # Wait for sync to complete by checking balance for spendable funds
+          # This is more reliable than syncstatus
+          echo "Waiting for sync to complete (checking for spendable balance)..."
+          for i in {1..90}; do
+            # Check if we have any confirmed balance
+            BALANCE_CHECK=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest --nosync" 2>/dev/null || echo "")
             
-            if echo "$SYNC_STATUS" | grep -qi "synced\|in_progress.*false\|\"syncing\":.*false"; then
-              echo "  ✓ Sync completed after ${i}0 seconds"
+            # Parse confirmed transparent balance
+            CONFIRMED_TRANSPARENT=$(echo "$BALANCE_CHECK" | grep 'confirmed_transparent_balance' | sed 's/[^0-9]//g' || echo "0")
+            CONFIRMED_TRANSPARENT=${CONFIRMED_TRANSPARENT:-0}
+            
+            if [ "$CONFIRMED_TRANSPARENT" -gt 0 ]; then
+              echo "  ✓ Sync completed - found ${CONFIRMED_TRANSPARENT} zatoshi transparent balance"
               return 0
             fi
             
-            # Check if sync shows real progress
-            WALLET_HEIGHT=$(echo "$SYNC_STATUS" | grep -o '"wallet_height":\s*[0-9]*' | grep -o '[0-9]*' || echo "0")
-            CHAIN_HEIGHT=$(echo "$SYNC_STATUS" | grep -o '"target_height":\s*[0-9]*' | grep -o '[0-9]*' || echo "0")
-            
-            if [ -n "$WALLET_HEIGHT" ] && [ -n "$CHAIN_HEIGHT" ] && [ "$WALLET_HEIGHT" -gt 0 ]; then
-              echo "  Syncing: wallet=$WALLET_HEIGHT chain=$CHAIN_HEIGHT"
+            # Show progress every 30 seconds
+            if [ $((i % 3)) -eq 0 ]; then
+              echo "  Still syncing... ($((i * 10))s elapsed)"
             fi
             
             sleep 10
           done
           
-          echo "  Sync timeout, continuing anyway..."
+          echo "  ⚠ Sync timeout after 900s, continuing anyway..."
         }
         
         sync_wallet_and_wait
