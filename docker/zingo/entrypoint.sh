@@ -139,4 +139,4 @@ fi
 echo "✅ Wallet is ready! (Action will sync after mining blocks)"
 
 # Keep container running
-tail -f /dev/null
+tail -f /dev/null# Trigger rebuild Sun Jan  4 17:37:39 WAT 2026
