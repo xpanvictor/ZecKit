@@ -88,22 +88,14 @@ runs:
           echo "ZECKIT_DIR=${{ inputs.working-directory }}" >> $GITHUB_ENV
         fi
 
-    - name: Download pre-mined snapshot
+    # DISABLED: Snapshot approach doesn't work because mining address changes
+    # The wallet generates a new address each run, but snapshot has blocks mined to old address
+    # TODO: Re-enable once we have a fixed deterministic address baked into images
+    - name: Skip snapshot (disabled)
       shell: bash
       run: |
-        echo "Downloading pre-mined blockchain snapshot..."
-        mkdir -p /tmp/snapshot
-        
-        # Download from GitHub Releases
-        SNAPSHOT_URL="https://github.com/xpanvictor/ZecKit/releases/download/snapshot-latest/blockchain-snapshot.tar.gz"
-        
-        if curl -sfL -o /tmp/snapshot/blockchain-snapshot.tar.gz "$SNAPSHOT_URL"; then
-          echo "✓ Snapshot downloaded ($(ls -lh /tmp/snapshot/blockchain-snapshot.tar.gz | awk '{print $5}'))"
-          echo "SNAPSHOT_AVAILABLE=true" >> $GITHUB_ENV
-        else
-          echo "⚠ Snapshot not available, will mine blocks from scratch"
-          echo "SNAPSHOT_AVAILABLE=false" >> $GITHUB_ENV
-        fi
+        echo "⚠ Snapshot disabled - mining fresh blocks to match wallet address"
+        echo "SNAPSHOT_AVAILABLE=false" >> $GITHUB_ENV
 
     - name: Pull Docker images
       shell: bash
@@ -354,42 +346,36 @@ runs:
           LWD_SERVER="http://lightwalletd:9067"
         fi
         
-        # Function to sync wallet and wait for completion
+        # Function to sync wallet and wait for balance
         sync_wallet_and_wait() {
           echo "Starting wallet sync..."
           
-          # Try to start sync (may already be running from old entrypoint)
-          SYNC_START=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'sync run\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" 2>&1 || true)
+          # Start sync
+          docker exec $WALLET_CONTAINER bash -c "echo -e 'sync run\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" 2>&1 || true
           
-          if echo "$SYNC_START" | grep -q "already running"; then
-            echo "  Sync already running, will wait for completion..."
-          fi
-          
-          # Wait for sync to complete by checking balance for spendable funds
-          # This is more reliable than syncstatus
-          echo "Waiting for sync to complete (checking for spendable balance)..."
+          # Wait for wallet to show balance
+          echo "Waiting for wallet to sync and show balance..."
           for i in {1..90}; do
-            # Check if we have any confirmed balance
             BALANCE_CHECK=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest --nosync" 2>/dev/null || echo "")
             
-            # Parse confirmed transparent balance
-            CONFIRMED_TRANSPARENT=$(echo "$BALANCE_CHECK" | grep 'confirmed_transparent_balance' | sed 's/[^0-9]//g' || echo "0")
-            CONFIRMED_TRANSPARENT=${CONFIRMED_TRANSPARENT:-0}
+            # Extract just the number after confirmed_transparent_balance
+            CONFIRMED_TRANSPARENT=$(echo "$BALANCE_CHECK" | grep 'confirmed_transparent_balance' | grep -oE '[0-9_]+' | tr -d '_' | head -1)
             
-            if [ "$CONFIRMED_TRANSPARENT" -gt 0 ]; then
-              echo "  ✓ Sync completed - found ${CONFIRMED_TRANSPARENT} zatoshi transparent balance"
+            # Ensure it's a valid integer
+            if [[ "$CONFIRMED_TRANSPARENT" =~ ^[0-9]+$ ]] && [ "$CONFIRMED_TRANSPARENT" -gt 0 ]; then
+              echo "  ✓ Found balance: ${CONFIRMED_TRANSPARENT} zatoshi"
               return 0
             fi
             
-            # Show progress every 30 seconds
+            # Show progress
             if [ $((i % 3)) -eq 0 ]; then
-              echo "  Still syncing... ($((i * 10))s elapsed)"
+              echo "  Waiting for balance... ($((i * 10))s)"
             fi
             
             sleep 10
           done
           
-          echo "  ⚠ Sync timeout after 900s, continuing anyway..."
+          echo "  ⚠ No balance found after 900s"
         }
         
         sync_wallet_and_wait
