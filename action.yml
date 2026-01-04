@@ -448,33 +448,39 @@ runs:
               fi
             done
             
-            echo "  Auto-shielding transparent funds to Orchard..."
-            
-            # Shield transparent funds to Orchard (use 'sync' not 'sync run' to ensure completion)
-            SHIELD_OUT=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'shield\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" 2>&1 || true)
-            echo "  Shield output: $SHIELD_OUT"
-            
-            if echo "$SHIELD_OUT" | grep -qi "error\|insufficient"; then
-              echo "::warning::Shield failed - will try during E2E tests"
-            else
-              echo "  Waiting for shield transaction to be mined (90s)..."
-              sleep 90
+            # Only try to shield if we found confirmed balance
+            if [ "$CONFIRMED" -gt 0 ]; then
+              echo "  Auto-shielding transparent funds to Orchard..."
               
-              # Sync wallet to see shielded balance
-              echo "  Syncing wallet after shield..."
-              docker exec $WALLET_CONTAINER bash -c "echo -e 'sync run\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" 2>&1 || true
-              sleep 10
+              # Shield transparent funds to Orchard
+              SHIELD_OUT=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'shield\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" 2>&1 || true)
+              echo "  Shield output: $SHIELD_OUT"
               
-              # Check new balance
-              NEW_BALANCE=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest --nosync" 2>/dev/null | grep confirmed_orchard_balance | head -1 | sed 's/[^0-9]//g')
-              NEW_BALANCE=${NEW_BALANCE:-0}
-              echo "  Orchard balance after shield: $((NEW_BALANCE / 100000000)) ZEC"
-              
-              if [ "$NEW_BALANCE" -gt 0 ]; then
-                echo "✓ Successfully shielded funds to Orchard"
+              if echo "$SHIELD_OUT" | grep -qi "panic\|error\|insufficient"; then
+                echo "::warning::Shield failed - will try during E2E tests"
+                echo "  Shield error details: $SHIELD_OUT"
               else
-                echo "::warning::Shield may not have completed yet - E2E tests may need to wait"
+                echo "  Waiting for shield transaction to be mined (90s)..."
+                sleep 90
+                
+                # Sync wallet to see shielded balance
+                echo "  Syncing wallet after shield..."
+                docker exec $WALLET_CONTAINER bash -c "echo -e 'sync run\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest" 2>&1 || true
+                sleep 10
+                
+                # Check new balance
+                NEW_BALANCE=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest --nosync" 2>/dev/null | grep confirmed_orchard_balance | head -1 | sed 's/[^0-9]//g')
+                NEW_BALANCE=${NEW_BALANCE:-0}
+                echo "  Orchard balance after shield: $((NEW_BALANCE / 100000000)) ZEC"
+                
+                if [ "$NEW_BALANCE" -gt 0 ]; then
+                  echo "✓ Successfully shielded funds to Orchard"
+                else
+                  echo "::warning::Shield may not have completed yet - E2E tests may need to wait"
+                fi
               fi
+            else
+              echo "::warning::Wallet has no confirmed balance - cannot shield"
             fi
           else
             echo "::warning::Faucet has zero balance in all pools - E2E tests may fail"
