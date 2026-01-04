@@ -418,10 +418,11 @@ runs:
               BALANCE_CHECK=$(docker exec $WALLET_CONTAINER bash -c "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo --server $LWD_SERVER --chain regtest --nosync" 2>/dev/null || echo "")
               
               # Parse confirmed transparent balance (if > 0, it should be spendable after sync)
-              CONFIRMED=$(echo "$BALANCE_CHECK" | grep 'confirmed_transparent_balance' | sed 's/[^0-9]//g' || echo "0")
+              CONFIRMED=$(echo "$BALANCE_CHECK" | grep 'confirmed_transparent_balance' | grep -oE '[0-9_]+' | tr -d '_' | head -1)
               CONFIRMED=${CONFIRMED:-0}
               
-              if [ "$CONFIRMED" -gt 0 ]; then
+              # Validate CONFIRMED is a valid integer before comparison
+              if [[ "$CONFIRMED" =~ ^[0-9]+$ ]] && [ "$CONFIRMED" -gt 0 ]; then
                 echo "  ✓ Confirmed transparent balance: $CONFIRMED zatoshi"
                 break
               fi

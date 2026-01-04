@@ -138,7 +138,7 @@ services:
       zebra:
         condition: service_healthy
       lightwalletd:
-        condition: service_started
+        condition: service_healthy
     environment:
       - ZINGO_DATA_DIR=/var/zingo
       - LIGHTWALLETD_URI=http://lightwalletd:9067
@@ -205,7 +205,7 @@ services:
       zebra:
         condition: service_healthy
       lightwalletd:
-        condition: service_started
+        condition: service_healthy
       zingo-wallet-lwd:
         condition: service_healthy
     networks:
