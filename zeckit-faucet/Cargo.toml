@@ -1,7 +1,7 @@
 [package]
 name = "zeckit-faucet"
 version = "0.3.0"
-edition = "2025"
+edition = "2021"
 
 [dependencies]
 # Async runtime
