@@ -1,0 +1,49 @@
+[package]
+name = "zeckit-faucet"
+version = "0.3.0"
+edition = "2021"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Web framework
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# HTTP client for Zebra RPC
+reqwest = { version = "0.12", features = ["json"] }
+
+# Zingolib - using dev branch for latest regtest fixes
+zingolib = { git = "https://github.com/zingolabs/zingolib", branch = "dev" }
+
+# Zcash primitives for address validation
+zcash_primitives = "0.15"
+zcash_client_backend = "0.13"
+zcash_address = "0.4"
+
+[dev-dependencies]
+tempfile = "3.0"
+mockito = "1.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

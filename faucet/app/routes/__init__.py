@@ -1,3 +1,0 @@
-"""
-Faucet API Routes
-"""

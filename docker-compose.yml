@@ -12,6 +12,7 @@ volumes:
   zebra-data:
   lightwalletd-data:
   zaino-data:
+  faucet-data:  # New: persistent faucet wallet data
 
 # ========================================
 # SERVICES
@@ -113,67 +114,7 @@ services:
       start_period: 120s
 
   # ========================================
-  # ZINGO WALLET - LWD Profile
-  # ========================================
-  zingo-wallet-lwd:
-    build:
-      context: ./docker/zingo
-      dockerfile: Dockerfile
-    container_name: zeckit-zingo-wallet
-    tmpfs:
-      - /var/zingo:mode=1777,size=512m
-    depends_on:
-      zebra:
-        condition: service_healthy
-      lightwalletd:
-        condition: service_started
-    environment:
-      - ZINGO_DATA_DIR=/var/zingo
-      - LIGHTWALLETD_URI=http://lightwalletd:9067
-    networks:
-      - zeckit-network
-    restart: unless-stopped
-    profiles:
-      - lwd
-    healthcheck:
-      test: ["CMD", "test", "-d", "/var/zingo"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # ========================================
-  # ZINGO WALLET - Zaino Profile
-  # ========================================
-  zingo-wallet-zaino:
-    build:
-      context: ./docker/zingo
-      dockerfile: Dockerfile
-    container_name: zeckit-zingo-wallet
-    tmpfs:
-      - /var/zingo:mode=1777,size=512m
-    depends_on:
-      zebra:
-        condition: service_healthy
-      zaino:
-        condition: service_healthy
-    environment:
-      - ZINGO_DATA_DIR=/var/zingo
-      - LIGHTWALLETD_URI=http://zaino:9067
-    networks:
-      - zeckit-network
-    restart: unless-stopped
-    profiles:
-      - zaino
-    healthcheck:
-      test: ["CMD", "test", "-d", "/var/zingo"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # ========================================
-  # FAUCET SERVICE - LWD Profile
+  # RUST FAUCET - LWD Profile
   # ========================================
   faucet-lwd:
     build:
@@ -183,34 +124,34 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
-      - ./faucet:/app:ro
-      - /var/run/docker.sock:/var/run/docker.sock
+      - faucet-data:/var/zingo  # Persistent wallet storage
     environment:
       - LIGHTWALLETD_URI=http://lightwalletd:9067
-      - WALLET_CONTAINER=zeckit-zingo-wallet
-      - WALLET_DATA_DIR=/var/zingo
+      - ZEBRA_RPC_URL=http://zebra:8232
+      - ZINGO_DATA_DIR=/var/zingo
+      - FAUCET_AMOUNT_MIN=0.01
+      - FAUCET_AMOUNT_MAX=100.0
+      - FAUCET_AMOUNT_DEFAULT=10.0
+      - RUST_LOG=info
     depends_on:
       zebra:
         condition: service_healthy
       lightwalletd:
-        condition: service_started
-      zingo-wallet-lwd:
         condition: service_healthy
     networks:
       - zeckit-network
     restart: unless-stopped
     profiles:
       - lwd
-    user: root
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      start_period: 90s
 
   # ========================================
-  # FAUCET SERVICE - Zaino Profile
+  # RUST FAUCET - Zaino Profile
   # ========================================
   faucet-zaino:
     build:
@@ -220,28 +161,28 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
-      - ./faucet:/app:ro
-      - /var/run/docker.sock:/var/run/docker.sock
+      - faucet-data:/var/zingo  # Persistent wallet storage
     environment:
       - LIGHTWALLETD_URI=http://zaino:9067
-      - WALLET_CONTAINER=zeckit-zingo-wallet
-      - WALLET_DATA_DIR=/var/zingo
+      - ZEBRA_RPC_URL=http://zebra:8232
+      - ZINGO_DATA_DIR=/var/zingo
+      - FAUCET_AMOUNT_MIN=0.01
+      - FAUCET_AMOUNT_MAX=100.0
+      - FAUCET_AMOUNT_DEFAULT=10.0
+      - RUST_LOG=info
     depends_on:
       zebra:
         condition: service_healthy
       zaino:
-        condition: service_healthy
-      zingo-wallet-zaino:
         condition: service_healthy
     networks:
       - zeckit-network
     restart: unless-stopped
     profiles:
       - zaino
-    user: root
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      start_period: 90s
