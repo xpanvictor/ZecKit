@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest  # Runs on your WSL runner
     
     # Timeout after 10 minutes (devnet should be up much faster)
-    timeout-minutes: 10
+    timeout-minutes: 45
     
     steps:
       - name: Checkout code
