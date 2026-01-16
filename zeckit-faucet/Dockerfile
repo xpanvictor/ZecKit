@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     pkg-config \
     libssl-dev \
+    libsqlite3-dev \
     protobuf-compiler \
     git \
     && rm -rf /var/lib/apt/lists/*
@@ -27,6 +28,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    libsqlite3-0 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
