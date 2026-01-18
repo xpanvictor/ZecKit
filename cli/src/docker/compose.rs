@@ -49,59 +49,27 @@ impl DockerCompose {
         println!("(This may take 10-20 minutes on first build)");
         println!();
         
-        let mut cmd = Command::new("docker");
-        cmd.arg("compose")
+        // Build images silently
+        let build_status = Command::new("docker")
+            .arg("compose")
             .arg("--profile")
             .arg(profile)
             .arg("build")
-            .arg("--progress=plain")  // Force plain text output
+            .arg("-q")  // Quiet mode
             .current_dir(&self.project_dir)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = cmd.spawn()
+            .stdout(Stdio::null())  // Discard stdout
+            .stderr(Stdio::null())  // Discard stderr
+            .status()
             .map_err(|e| zeckitError::Docker(format!("Failed to start build: {}", e)))?;
 
-        // Get both stdout and stderr
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        // Spawn threads to read both streams simultaneously
-        let stdout_thread = thread::spawn(move || {
-            if let Some(stream) = stdout {
-                let reader = BufReader::new(stream);
-                for line in reader.lines().flatten() {
-                    println!("{}", line);
-                }
-            }
-        });
-
-        let stderr_thread = thread::spawn(move || {
-            if let Some(stream) = stderr {
-                let reader = BufReader::new(stream);
-                for line in reader.lines().flatten() {
-                    eprintln!("{}", line);
-                }
-            }
-        });
-
-        // Wait for both threads
-        let _ = stdout_thread.join();
-        let _ = stderr_thread.join();
-
-        // Wait for the child process
-        let status = child.wait()
-            .map_err(|e| zeckitError::Docker(format!("Build process error: {}", e)))?;
-
-        if !status.success() {
+        if !build_status.success() {
             return Err(zeckitError::Docker("Image build failed".into()));
         }
 
-        println!();
         println!("✓ Images built successfully");
         println!();
 
-        // THEN START SERVICES
+        // Start services
         println!("Starting containers...");
         let output = Command::new("docker")
             .arg("compose")
