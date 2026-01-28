@@ -11,7 +11,6 @@ use std::io::{self, Write};
 use tokio::time::{sleep, Duration};
 
 const MAX_WAIT_SECONDS: u64 = 60000;
-const WALLET_TIMEOUT_SECONDS: u64 = 6000;
 
 pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan());
@@ -46,10 +45,9 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
         println!("Building Docker images...");
         println!();
         
-        println!("[1/4] Building Zebra...");
-        println!("[2/4] Building Lightwalletd...");
-        println!("[3/4] Building Zingo Wallet...");
-        println!("[4/4] Building Faucet...");
+        println!("[1/3] Building Zebra...");
+        println!("[2/3] Building Lightwalletd...");
+        println!("[3/3] Building Faucet...");
         
         compose.up_with_profile("lwd")?;
         println!();
@@ -57,10 +55,9 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
         println!("Building Docker images...");
         println!();
         
-        println!("[1/4] Building Zebra...");
-        println!("[2/4] Building Zaino...");
-        println!("[3/4] Building Zingo Wallet...");
-        println!("[4/4] Building Faucet...");
+        println!("[1/3] Building Zebra...");
+        println!("[2/3] Building Zaino...");
+        println!("[3/3] Building Faucet...");
         
         compose.up_with_profile("zaino")?;
         println!();
@@ -78,7 +75,7 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
             .unwrap()
     );
     
-    // [1/4] Zebra with percentage
+    // [1/3] Zebra with percentage
     let checker = HealthChecker::new();
     let start = std::time::Instant::now();
     
@@ -86,14 +83,14 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
         pb.tick();
         
         if checker.wait_for_zebra(&pb).await.is_ok() {
-            println!("[1/4] Zebra ready (100%)");
+            println!("[1/3] Zebra ready (100%)");
             break;
         }
         
         let elapsed = start.elapsed().as_secs();
         if elapsed < 120 {
             let progress = (elapsed as f64 / 120.0 * 100.0).min(99.0) as u32;
-            print!("\r[1/4] Starting Zebra... {}%", progress);
+            print!("\r[1/3] Starting Zebra... {}%", progress);
             io::stdout().flush().ok();
             sleep(Duration::from_secs(1)).await;
         } else {
@@ -102,7 +99,7 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     }
     println!();
     
-    // [2/4] Backend with percentage
+    // [2/3] Backend with percentage
     if backend == "lwd" || backend == "zaino" {
         let backend_name = if backend == "lwd" { "Lightwalletd" } else { "Zaino" };
         let start = std::time::Instant::now();
@@ -111,14 +108,14 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
             pb.tick();
             
             if checker.wait_for_backend(&backend, &pb).await.is_ok() {
-                println!("[2/4] {} ready (100%)", backend_name);
+                println!("[2/3] {} ready (100%)", backend_name);
                 break;
             }
             
             let elapsed = start.elapsed().as_secs();
             if elapsed < 180 {
                 let progress = (elapsed as f64 / 180.0 * 100.0).min(99.0) as u32;
-                print!("\r[2/4] Starting {}... {}%", backend_name, progress);
+                print!("\r[2/3] Starting {}... {}%", backend_name, progress);
                 io::stdout().flush().ok();
                 sleep(Duration::from_secs(1)).await;
             } else {
@@ -128,50 +125,20 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
         println!();
     }
     
-    // [3/4] Wallet with percentage (EXTENDED TIMEOUT)
-    let backend_uri = if backend == "lwd" {
-        "http://lightwalletd:9067"
-    } else if backend == "zaino" {
-        "http://zaino:9067"
-    } else {
-        "http://lightwalletd:9067"
-    };
-    
-    let start = std::time::Instant::now();
-    loop {
-        pb.tick();
-        
-        if wait_for_wallet_ready(&pb, backend_uri).await.is_ok() {
-            println!("[3/4] Zingo Wallet ready (100%)");
-            break;
-        }
-        
-        let elapsed = start.elapsed().as_secs();
-        if elapsed < WALLET_TIMEOUT_SECONDS {
-            let progress = (elapsed as f64 / WALLET_TIMEOUT_SECONDS as f64 * 100.0).min(99.0) as u32;
-            print!("\r[3/4] Starting Zingo Wallet... {}%", progress);
-            io::stdout().flush().ok();
-            sleep(Duration::from_secs(1)).await;
-        } else {
-            return Err(zeckitError::ServiceNotReady("Wallet not ready after 100 minutes".into()));
-        }
-    }
-    println!();
-    
-    // [4/4] Faucet with percentage
+    // [3/3] Faucet with percentage (faucet now contains zingolib)
     let start = std::time::Instant::now();
     loop {
         pb.tick();
         
         if checker.wait_for_faucet(&pb).await.is_ok() {
-            println!("[4/4] Faucet ready (100%)");
+            println!("[3/3] Faucet ready (100%)");
             break;
         }
         
         let elapsed = start.elapsed().as_secs();
-        if elapsed < 60 {
-            let progress = (elapsed as f64 / 60.0 * 100.0).min(99.0) as u32;
-            print!("\r[4/4] Starting Faucet... {}%", progress);
+        if elapsed < 120 {
+            let progress = (elapsed as f64 / 120.0 * 100.0).min(99.0) as u32;
+            print!("\r[3/3] Starting Faucet... {}%", progress);
             io::stdout().flush().ok();
             sleep(Duration::from_secs(1)).await;
         } else {
@@ -182,11 +149,11 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     
     pb.finish_and_clear();
     
-    // GET WALLET ADDRESS AND UPDATE ZEBRA CONFIG
+    // GET WALLET ADDRESS FROM FAUCET API (not from zingo-wallet container)
     println!();
     println!("Configuring Zebra to mine to wallet...");
     
-    match get_wallet_transparent_address(backend_uri).await {
+    match get_wallet_transparent_address_from_faucet().await {
         Ok(t_address) => {
             println!("Wallet transparent address: {}", t_address);
             
@@ -215,11 +182,11 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     println!("Waiting for coinbase maturity (100 confirmations)...");
     sleep(Duration::from_secs(120)).await;
     
-    // Generate UA fixtures
+    // Generate UA fixtures from faucet API
     println!();
     println!("Generating ZIP-316 Unified Address fixtures...");
     
-    match generate_ua_fixtures(backend_uri).await {
+    match generate_ua_fixtures_from_faucet().await {
         Ok(address) => {
             println!("Generated UA: {}...", &address[..20]);
         }
@@ -229,10 +196,10 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
         }
     }
     
-    // Sync wallet
+    // Sync wallet through faucet API
     println!();
     println!("Syncing wallet with blockchain...");
-    if let Err(e) = sync_wallet(backend_uri).await {
+    if let Err(e) = sync_wallet_via_faucet().await {
         println!("{}", format!("Wallet sync warning: {}", e).yellow());
     } else {
         println!("Wallet synced with blockchain");
@@ -258,36 +225,6 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     print_mining_info().await?;
     
     Ok(())
-}
-
-async fn wait_for_wallet_ready(pb: &ProgressBar, backend_uri: &str) -> Result<()> {
-    let start = std::time::Instant::now();
-    
-    loop {
-        pb.tick();
-        
-        let cmd_str = format!(
-            "bash -c \"echo -e 't_addresses\\nquit' | zingo-cli --data-dir /var/zingo --server {} --chain regtest --nosync 2>&1\"",
-            backend_uri
-        );
-        
-        let output = Command::new("docker")
-            .args(&["exec", "zeckit-zingo-wallet", "bash", "-c", &cmd_str])
-            .output();
-        
-        if let Ok(out) = output {
-            let output_str = String::from_utf8_lossy(&out.stdout);
-            if output_str.contains("tm") && output_str.contains("encoded_address") {
-                return Ok(());
-            }
-        }
-        
-        if start.elapsed().as_secs() > WALLET_TIMEOUT_SECONDS {
-            return Err(zeckitError::ServiceNotReady("Wallet not ready after 100 minutes".into()));
-        }
-        
-        sleep(Duration::from_secs(2)).await;
-    }
 }
 
 async fn wait_for_mined_blocks(pb: &ProgressBar, min_blocks: u64) -> Result<()> {
@@ -341,35 +278,24 @@ async fn get_block_count(client: &Client) -> Result<u64> {
         .ok_or_else(|| zeckitError::HealthCheck("Invalid block count response".into()))
 }
 
-async fn get_wallet_transparent_address(backend_uri: &str) -> Result<String> {
-    let cmd_str = format!(
-        "bash -c \"echo -e 't_addresses\\nquit' | zingo-cli --data-dir /var/zingo --server {} --chain regtest --nosync 2>&1\"",
-        backend_uri
-    );
+// NEW: Get wallet address from faucet API instead of zingo-wallet container
+async fn get_wallet_transparent_address_from_faucet() -> Result<String> {
+    let client = Client::new();
     
-    let output = Command::new("docker")
-        .args(&["exec", "zeckit-zingo-wallet", "bash", "-c", &cmd_str])
-        .output()
-        .map_err(|e| zeckitError::HealthCheck(format!("Docker exec failed: {}", e)))?;
+    // Call faucet API to get transparent address
+    let resp = client
+        .get("http://127.0.0.1:8080/address")
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| zeckitError::HealthCheck(format!("Faucet API call failed: {}", e)))?;
     
-    let output_str = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = resp.json().await?;
     
-    for line in output_str.lines() {
-        if line.contains("\"encoded_address\"") && line.contains("tm") {
-            if let Some(start) = line.find("tm") {
-                let addr_part = &line[start..];
-                let end = addr_part.find(|c: char| c == '"' || c == '\n' || c == ' ')
-                    .unwrap_or(addr_part.len());
-                let address = &addr_part[..end];
-                
-                if address.starts_with("tm") && address.len() > 30 {
-                    return Ok(address.to_string());
-                }
-            }
-        }
-    }
-    
-    Err(zeckitError::HealthCheck("Could not find transparent address in wallet output".into()))
+    json.get("transparent_address")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| zeckitError::HealthCheck("No transparent address in faucet response".into()))
+        .map(|s| s.to_string())
 }
 
 fn update_zebra_miner_address(address: &str) -> Result<()> {
@@ -410,69 +336,55 @@ async fn restart_zebra() -> Result<()> {
     Ok(())
 }
 
-async fn generate_ua_fixtures(backend_uri: &str) -> Result<String> {
-    let cmd_str = format!(
-        "bash -c \"echo -e 'addresses\\nquit' | zingo-cli --data-dir /var/zingo --server {} --chain regtest --nosync 2>&1\"",
-        backend_uri
-    );
+// NEW: Get UA from faucet API instead of zingo-wallet container
+async fn generate_ua_fixtures_from_faucet() -> Result<String> {
+    let client = Client::new();
     
-    let output = Command::new("docker")
-        .args(&["exec", "zeckit-zingo-wallet", "bash", "-c", &cmd_str])
-        .output()
-        .map_err(|e| zeckitError::HealthCheck(format!("Docker exec failed: {}", e)))?;
+    let resp = client
+        .get("http://127.0.0.1:8080/address")
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| zeckitError::HealthCheck(format!("Faucet API call failed: {}", e)))?;
     
-    let output_str = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = resp.json().await?;
     
-    for line in output_str.lines() {
-        if line.contains("uregtest") {
-            if let Some(start) = line.find("uregtest") {
-                let addr_part = &line[start..];
-                let end = addr_part.find(|c: char| c == '"' || c == '\n' || c == ' ')
-                    .unwrap_or(addr_part.len());
-                let address = &addr_part[..end];
-                
-                let fixture = json!({
-                    "faucet_address": address,
-                    "type": "unified",
-                    "receivers": ["orchard"]
-                });
-                
-                fs::create_dir_all("fixtures")?;
-                fs::write(
-                    "fixtures/unified-addresses.json",
-                    serde_json::to_string_pretty(&fixture)?
-                )?;
-                
-                return Ok(address.to_string());
-            }
-        }
-    }
+    let ua_address = json.get("unified_address")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| zeckitError::HealthCheck("No unified address in faucet response".into()))?;
     
-    Err(zeckitError::HealthCheck("Could not find wallet address in output".into()))
+    let fixture = json!({
+        "faucet_address": ua_address,
+        "type": "unified",
+        "receivers": ["orchard"]
+    });
+    
+    fs::create_dir_all("fixtures")?;
+    fs::write(
+        "fixtures/unified-addresses.json",
+        serde_json::to_string_pretty(&fixture)?
+    )?;
+    
+    Ok(ua_address.to_string())
 }
 
-async fn sync_wallet(backend_uri: &str) -> Result<()> {
-    let cmd_str = format!(
-        "echo 'sync run\nquit' | zingo-cli --data-dir /var/zingo --server {} --chain regtest 2>&1",
-        backend_uri
-    );
+// NEW: Sync wallet via faucet API instead of zingo-wallet container
+async fn sync_wallet_via_faucet() -> Result<()> {
+    let client = Client::new();
     
-    let output = Command::new("docker")
-        .args(&[
-            "exec", "-i", "zeckit-zingo-wallet",
-            "sh", "-c",
-            &cmd_str
-        ])
-        .output()
-        .map_err(|e| zeckitError::HealthCheck(format!("Sync command failed: {}", e)))?;
+    // Call faucet's sync endpoint
+    let resp = client
+        .post("http://127.0.0.1:8080/sync")
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| zeckitError::HealthCheck(format!("Faucet sync failed: {}", e)))?;
     
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    
-    if output_str.contains("Sync error") {
-        Err(zeckitError::HealthCheck("Wallet sync error detected".into()))
-    } else {
-        Ok(())
+    if !resp.status().is_success() {
+        return Err(zeckitError::HealthCheck("Wallet sync error via faucet API".into()));
     }
+    
+    Ok(())
 }
 
 async fn check_wallet_balance() -> Result<f64> {

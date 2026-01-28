@@ -23,8 +23,19 @@ WORKDIR /build/zaino
 # Checkout your fix branch
 RUN git checkout fix/regtest-insecure-grpc
 
-# Build with NO_TLS flag
-RUN cargo build --release --bin zainod --features no_tls_use_unencrypted_traffic
+# 🔥 CACHE CARGO DEPENDENCIES FIRST (this is the magic)
+ENV CARGO_HOME=/usr/local/cargo
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/zaino/target \
+    cargo fetch
+
+# 🔥 BUILD WITH PERSISTENT CACHES
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/zaino/target \
+    cargo build --release --bin zainod --features no_tls_use_unencrypted_traffic && \
+    cp target/release/zainod /tmp/zainod
 
 # ========================================
 # Runtime Stage
@@ -40,7 +51,7 @@ RUN apt-get update && apt-get install -y \
 
 RUN useradd -m -u 2002 -s /bin/bash zaino
 
-COPY --from=builder /build/zaino/target/release/zainod /usr/local/bin/zainod
+COPY --from=builder /tmp/zainod /usr/local/bin/zainod
 RUN chmod +x /usr/local/bin/zainod
 
 COPY entrypoint.sh /entrypoint.sh

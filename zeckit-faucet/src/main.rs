@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
-use tracing::{info, error};
+use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod config;
@@ -45,7 +45,7 @@ async fn main() -> anyhow::Result<()> {
     info!("  LightwalletD URI: {}", config.lightwalletd_uri);
     info!("  Data dir: {}", config.zingo_data_dir.display());
 
-    // Initialize wallet manager
+    // Initialize wallet manager (without initial sync)
     info!("💼 Initializing wallet...");
     let wallet = WalletManager::new(
         config.zingo_data_dir.clone(),
@@ -54,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
 
     let wallet = Arc::new(RwLock::new(wallet));
 
-    // Get initial wallet info
+    // Get initial wallet info (no sync yet)
     {
         let wallet_lock = wallet.read().await;
         let address = wallet_lock.get_unified_address().await?;
@@ -62,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
         
         info!("✅ Wallet initialized");
         info!("  Address: {}", address);
-        info!("  Balance: {} ZEC", balance.total_zec());
+        info!("  Balance: {} ZEC (not synced yet)", balance.total_zec());
     }
 
     // Build application state
@@ -79,7 +79,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/stats", get(api::stats::get_stats))
         .route("/history", get(api::stats::get_history))
         .route("/request", post(api::faucet::request_funds))
-        .route("/address", get(api::faucet::get_faucet_address))
+        .route("/address", get(api::wallet::get_addresses))
+        .route("/sync", post(api::wallet::sync_wallet))
         .layer(CorsLayer::permissive())
         .with_state(state);
 

@@ -1,6 +1,7 @@
 pub mod health;
 pub mod faucet;
 pub mod stats;
+pub mod wallet;  // Add this
 
 use axum::{Json, extract::State};
 use serde_json::json;
@@ -19,6 +20,7 @@ pub async fn root(State(_state): State<AppState>) -> Json<serde_json::Value> {
             "stats": "/stats",
             "request": "/request",
             "address": "/address",
+            "sync": "/sync",      // Add this
             "history": "/history"
         }
     }))

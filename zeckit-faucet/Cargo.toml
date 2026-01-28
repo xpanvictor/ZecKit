@@ -37,6 +37,12 @@ zingolib = { git = "https://github.com/Timi16/zingolib", branch = "zcash-params-
 # Zcash address handling
 zcash_address = "0.4"
 zcash_primitives = "0.26.4"
+zip32 = "0.2.1"
+zcash_client_backend = "0.21.0"
+zcash_keys = "0.12.0"
+zcash_protocol = "0.7.2"
+zingo-memo = "0.1.0"
+zebra-chain = "3.1.0"
 
 [dev-dependencies]
 tempfile = "3.0"

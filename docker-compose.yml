@@ -110,15 +110,15 @@ services:
       test: ["CMD-SHELL", "timeout 5 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/9067' || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 30
-      start_period: 120s
+      retries: 60
+      start_period: 180s
 
   # ========================================
   #  FAUCET SERVICE - LWD Profile
   # ========================================
   faucet-lwd:
     build:
-      context: ./zeckit-faucet  # ← CHANGED FROM ./faucet
+      context: ./zeckit-faucet
       dockerfile: Dockerfile
     container_name: zeckit-faucet
     ports:
@@ -143,19 +143,13 @@ services:
     restart: unless-stopped
     profiles:
       - lwd
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 90s
 
   # ========================================
   #  FAUCET SERVICE - Zaino Profile
   # ========================================
   faucet-zaino:
     build:
-      context: ./zeckit-faucet  # ← CHANGED FROM ./faucet
+      context: ./zeckit-faucet
       dockerfile: Dockerfile
     container_name: zeckit-faucet
     ports:
@@ -174,15 +168,9 @@ services:
       zebra:
         condition: service_healthy
       zaino:
-        condition: service_healthy
+        condition: service_started
     networks:
       - zeckit-network
     restart: unless-stopped
     profiles:
       - zaino
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 90s

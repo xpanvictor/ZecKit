@@ -19,7 +19,7 @@ impl HealthChecker {
             client: Client::new(),
             max_retries: 560,
             retry_delay: Duration::from_secs(2),
-            backend_max_retries: 600,
+            backend_max_retries: 900,  // CHANGED: Increased from 600 to 900 (30 minutes)
         }
     }
 
@@ -112,7 +112,7 @@ impl HealthChecker {
 
         Ok(())
     }
-
+    
     async fn check_backend(&self, backend: &str) -> Result<()> {
         // Zaino and Lightwalletd are gRPC services on port 9067
         // They don't respond to HTTP, so we do a TCP connection check
@@ -125,7 +125,10 @@ impl HealthChecker {
             StdDuration::from_secs(2)
         ) {
             Ok(_) => {
-                // Port is open and accepting connections - backend is ready!
+                // For Zaino, give it extra time after port opens to initialize
+                if backend == "zaino" {
+                    sleep(Duration::from_secs(10)).await;
+                }
                 Ok(())
             }
             Err(_) => {

@@ -4,10 +4,13 @@ use std::path::PathBuf;
 use tracing::info;
 use zingolib::{
     lightclient::LightClient,
-    config::ZingoConfig,
+    config::{ZingoConfig, ChainType},
 };
-// Import from axum instead of separate http crate
 use axum::http::Uri;
+use zcash_primitives::consensus::BlockHeight;
+use zebra_chain::parameters::testnet::ConfiguredActivationHeights;
+use zcash_primitives::memo::MemoBytes;
+use zcash_client_backend::zip321::{TransactionRequest, Payment};
 
 #[derive(Debug, Clone)]
 pub struct Balance {
@@ -46,23 +49,33 @@ impl WalletManager {
     ) -> Result<Self, FaucetError> {
         info!("Initializing ZingoLib LightClient");
         
-        // Parse the server URI using axum::http::Uri
         let uri: Uri = server_uri.parse().map_err(|e| {
             FaucetError::Wallet(format!("Invalid server URI: {}", e))
         })?;
 
-        // Create wallet directory if it doesn't exist
         std::fs::create_dir_all(&data_dir).map_err(|e| {
             FaucetError::Wallet(format!("Failed to create wallet directory: {}", e))
         })?;
 
-        // Build configuration for regtest
-        let config = ZingoConfig::build(zingolib::config::ChainType::Regtest(Default::default()))
-            .set_lightwalletd_uri(uri)  // Pass Uri directly, not wrapped in Arc<RwLock>
+        let activation_heights = ConfiguredActivationHeights {
+            before_overwinter: Some(1),
+            overwinter: Some(1),
+            sapling: Some(1),
+            blossom: Some(1),
+            heartwood: Some(1),
+            canopy: Some(1),
+            nu5: Some(1),
+            nu6: Some(1),
+            nu6_1: Some(1),
+            nu7: Some(1),
+        };
+        let chain_type = ChainType::Regtest(activation_heights);
+        
+        let config = ZingoConfig::build(chain_type)
+            .set_lightwalletd_uri(uri)
             .set_wallet_dir(data_dir.clone())
             .create();
 
-        // Try to load existing wallet or create new one
         let wallet_path = data_dir.join("zingo-wallet.dat");
         let client = if wallet_path.exists() {
             info!("Loading existing wallet from {:?}", wallet_path);
@@ -73,63 +86,70 @@ impl WalletManager {
             info!("Creating new wallet");
             LightClient::new(
                 config,
-                zcash_primitives::consensus::BlockHeight::from_u32(0),
+                BlockHeight::from_u32(0),
                 false,
             ).map_err(|e| {
                 FaucetError::Wallet(format!("Failed to create wallet: {}", e))
             })?
         };
 
-        // Initialize transaction history
         let history = TransactionHistory::load(&data_dir)?;
 
-        // Sync wallet
-        info!("Syncing wallet with chain...");
-        let mut client_mut = client;
-        client_mut.sync().await.map_err(|e| {
-            FaucetError::Wallet(format!("Sync failed: {}", e))
-        })?;
+        // REMOVED THE SYNC HERE - let the API endpoint handle syncing
+        info!("Wallet initialized successfully (sync not started)");
 
-        info!("Wallet initialized successfully");
-
-        Ok(Self { client: client_mut, history })
+        Ok(Self { client, history })  // Changed from client_mut
     }
 
     pub async fn get_unified_address(&self) -> Result<String, FaucetError> {
-        // TODO: Update this to match actual zingolib API
-        // The method names and return types need to be verified against your zingolib version
-        let _wallet = self.client.wallet.read().await;
+        let addresses_json = self.client.unified_addresses_json().await;
         
-        // This is a placeholder - you need to check the actual API
-        // Possible methods: wallet.addresses(), wallet.get_all_addresses(), etc.
-        Err(FaucetError::Wallet(
-            "get_unified_address() needs implementation for this zingolib version".to_string()
-        ))
+        let first_address = addresses_json[0]["encoded_address"]
+            .as_str()
+            .ok_or_else(|| FaucetError::Wallet("No unified address found".to_string()))?;
+        
+        Ok(first_address.to_string())
+    }
+
+    pub async fn get_transparent_address(&self) -> Result<String, FaucetError> {
+        let addresses_json = self.client.transparent_addresses_json().await;
+        
+        let first_address = addresses_json[0]["encoded_address"]
+            .as_str()
+            .ok_or_else(|| FaucetError::Wallet("No transparent address found".to_string()))?;
+        
+        Ok(first_address.to_string())
     }
 
     pub async fn get_balance(&self) -> Result<Balance, FaucetError> {
-        // TODO: Update this to match actual zingolib API
-        let _wallet = self.client.wallet.read().await;
+        let account_balance = self.client
+            .account_balance(zip32::AccountId::ZERO)
+            .await
+            .map_err(|e| FaucetError::Wallet(format!("Failed to get balance: {}", e)))?;
         
-        // This is a placeholder - you need to check the actual API
-        // The balance calculation method will depend on your zingolib version
-        Err(FaucetError::Wallet(
-            "get_balance() needs implementation for this zingolib version".to_string()
-        ))
+        Ok(Balance {
+            transparent: account_balance.confirmed_transparent_balance
+                .map(|z| z.into_u64())
+                .unwrap_or(0),
+            sapling: account_balance.confirmed_sapling_balance
+                .map(|z| z.into_u64())
+                .unwrap_or(0),
+            orchard: account_balance.confirmed_orchard_balance
+                .map(|z| z.into_u64())
+                .unwrap_or(0),
+        })
     }
 
     pub async fn send_transaction(
         &mut self,
         to_address: &str,
         amount_zec: f64,
-        _memo: Option<String>,
+        memo: Option<String>,
     ) -> Result<String, FaucetError> {
         info!("Sending {} ZEC to {}", amount_zec, &to_address[..to_address.len().min(16)]);
 
-        // Convert ZEC to zatoshis
         let amount_zatoshis = (amount_zec * 100_000_000.0) as u64;
 
-        // Check balance
         let balance = self.get_balance().await?;
         if balance.orchard < amount_zatoshis {
             return Err(FaucetError::InsufficientBalance(format!(
@@ -139,12 +159,66 @@ impl WalletManager {
             )));
         }
 
-        // TODO: Update this to match actual zingolib API
-        // The send method signature will depend on your zingolib version
-        Err(FaucetError::TransactionFailed(
-            "send_transaction() needs implementation for this zingolib version. \
-             Please check zingolib documentation for the correct API.".to_string()
-        ))
+        // Parse recipient address
+        let recipient_address = to_address.parse()
+            .map_err(|e| FaucetError::Wallet(format!("Invalid address: {}", e)))?;
+
+        // Create amount
+        let amount = zcash_protocol::value::Zatoshis::from_u64(amount_zatoshis)
+            .map_err(|_| FaucetError::Wallet("Invalid amount".to_string()))?;
+
+        // Create memo bytes if provided
+        let memo_bytes = if let Some(memo_text) = &memo {
+            // Convert string to bytes (max 512 bytes for Zcash memo)
+            let bytes = memo_text.as_bytes();
+            if bytes.len() > 512 {
+                return Err(FaucetError::Wallet("Memo too long (max 512 bytes)".to_string()));
+            }
+            
+            // Pad to 512 bytes
+            let mut padded = [0u8; 512];
+            padded[..bytes.len()].copy_from_slice(bytes);
+            
+            Some(MemoBytes::from_bytes(&padded)
+                .map_err(|e| FaucetError::Wallet(format!("Invalid memo: {}", e)))?)
+        } else {
+            None
+        };
+
+        // Create Payment with all 6 required arguments
+        let payment = Payment::new(
+            recipient_address,
+            amount,
+            memo_bytes,
+            None,  // label
+            None,  // message
+            vec![], // other_params
+        ).ok_or_else(|| FaucetError::Wallet("Failed to create payment".to_string()))?;
+
+        // Create TransactionRequest
+        let request = TransactionRequest::new(vec![payment])
+            .map_err(|e| FaucetError::Wallet(format!("Failed to create request: {}", e)))?;
+
+        // Send using quick_send
+        let txids = self.client
+            .quick_send(request, zip32::AccountId::ZERO, false)
+            .await
+            .map_err(|e| {
+                FaucetError::TransactionFailed(format!("Failed to send transaction: {}", e))
+            })?;
+
+        let txid = txids.first().to_string();
+
+        // Record in history
+        self.history.add_transaction(TransactionRecord {
+            txid: txid.clone(),
+            to_address: to_address.to_string(),
+            amount: amount_zec,
+            timestamp: chrono::Utc::now(),
+            memo: memo.unwrap_or_default(),
+        })?;
+
+        Ok(txid)
     }
 
     pub async fn sync(&mut self) -> Result<(), FaucetError> {
