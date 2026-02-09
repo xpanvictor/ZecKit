@@ -34,14 +34,14 @@ jobs:
             echo "Waiting for Docker daemon..."
             for i in {1..60}; do
               if docker ps > /dev/null 2>&1; then
-                echo "✓ Docker daemon is ready!"
+                echo "Docker daemon is ready"
                 break
               fi
               echo "Attempt $i/60: Docker not ready yet, waiting..."
               sleep 2
             done
           else
-            echo "✓ Docker already running"
+            echo "Docker already running"
           fi
           
           docker --version
@@ -69,17 +69,17 @@ jobs:
           echo "Stopping containers..."
           docker compose down 2>/dev/null || true
           
-          # Remove volumes to clear stale data (keeps images!)
+          # Remove volumes to clear stale data
           echo "Removing stale volumes..."
           docker volume rm zeckit_zebra-data 2>/dev/null || true
           docker volume rm zeckit_zaino-data 2>/dev/null || true
-          docker volume rm zeckit_zingo-data 2>/dev/null || true
-          docker volume rm zeckit_faucet-wallet-data 2>/dev/null || true
+          docker volume rm zeckit_lightwalletd-data 2>/dev/null || true
+          docker volume rm zeckit_faucet-data 2>/dev/null || true
           
           # Remove orphaned containers
           docker compose down --remove-orphans 2>/dev/null || true
           
-          echo "✓ Cleanup complete (images preserved)"
+          echo "Cleanup complete (images preserved)"
           echo ""
       
       - name: Build CLI binary
@@ -90,44 +90,32 @@ jobs:
           cd cli
           cargo build --release
           cd ..
-          echo "✓ CLI binary built"
+          echo "CLI binary built"
           ls -lh cli/target/release/zeckit
           echo ""
       
-      - name: Start devnet with zaino backend
+      - name: Start devnet with Zaino backend
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "  Starting ZecKit Devnet"
+          echo "  Starting ZecKit Devnet (Zaino)"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
           
-          # No --fresh flag, but volumes are already cleared above
-          ./cli/target/release/zeckit up --backend zaino &
-          PID=$!
+          # zeckit up handles everything:
+          # - Configures mining address
+          # - Starts containers
+          # - Mines 101 blocks for coinbase maturity
+          # - Mines 100 additional blocks
+          # - Generates UA fixtures
+          # - Syncs wallet
+          # - Shields funds to Orchard
+          # - Starts continuous mining
+          ./cli/target/release/zeckit up --backend zaino
           
-          SECONDS=0
-          MAX_SECONDS=3600
-          
-          while kill -0 $PID 2>/dev/null && [ $SECONDS -lt $MAX_SECONDS ]; do
-            sleep 30
-            ELAPSED_MIN=$((SECONDS / 60))
-            echo "⏱️  Starting devnet... ($ELAPSED_MIN minutes elapsed)"
-          done
-          
-          if kill -0 $PID 2>/dev/null; then
-            echo "✗ Devnet startup timed out after 1 hour"
-            kill $PID 2>/dev/null || true
-            echo ""
-            echo "Container logs:"
-            docker compose logs || true
-            exit 1
-          fi
-          
-          wait $PID
           EXIT_CODE=$?
           
           if [ $EXIT_CODE -ne 0 ]; then
-            echo "✗ Devnet startup failed!"
+            echo "Devnet startup failed"
             echo ""
             echo "Container logs:"
             docker compose logs || true
@@ -135,7 +123,32 @@ jobs:
           fi
           
           echo ""
-          echo "✓ Devnet started successfully"
+          echo "Devnet started successfully"
+          echo ""
+      
+      - name: Verify services are running
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Verifying Services"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
+          # Check Zebra
+          echo "Checking Zebra RPC..."
+          curl -s http://127.0.0.1:8232 -X POST \
+            -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"1.0","id":"1","method":"getblockcount","params":[]}' | jq .result || exit 1
+          
+          # Check Faucet
+          echo "Checking Faucet API..."
+          curl -s http://127.0.0.1:8080/health | jq . || exit 1
+          
+          # Check Faucet balance
+          echo "Checking Faucet balance..."
+          curl -s http://127.0.0.1:8080/stats | jq '.current_balance, .transparent_balance, .orchard_balance' || exit 1
+          
+          echo ""
+          echo "All services are responding"
           echo ""
       
       - name: Run smoke tests
@@ -145,15 +158,56 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
           
+          # zeckit test runs all 6 tests:
+          # [1/6] Zebra RPC connectivity
+          # [2/6] Faucet health check
+          # [3/6] Faucet address retrieval
+          # [4/6] Wallet sync capability
+          # [5/6] Wallet balance and shield
+          # [6/6] Shielded send (E2E)
           ./cli/target/release/zeckit test
           
           TEST_EXIT_CODE=$?
           
           echo ""
           if [ $TEST_EXIT_CODE -eq 0 ]; then
-            echo "✓ All smoke tests PASSED!"
+            echo "All smoke tests PASSED"
           else
-            echo "✗ Smoke tests FAILED!"
+            echo "Smoke tests FAILED"
+            exit 1
+          fi
+          echo ""
+      
+      - name: Test shielded transaction manually
+        if: always()
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Manual Shielded Transaction Test"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
+          # Get faucet address
+          ADDR=$(curl -s http://127.0.0.1:8080/address | jq -r .unified_address)
+          echo "Recipient address: ${ADDR:0:30}..."
+          
+          # Send shielded transaction
+          echo "Sending shielded transaction..."
+          RESPONSE=$(curl -s -X POST http://127.0.0.1:8080/send \
+            -H "Content-Type: application/json" \
+            -d "{\"address\":\"$ADDR\",\"amount\":0.05,\"memo\":\"CI test\"}")
+          
+          echo "$RESPONSE" | jq .
+          
+          # Verify transaction
+          STATUS=$(echo "$RESPONSE" | jq -r .status)
+          if [ "$STATUS" = "sent" ]; then
+            TXID=$(echo "$RESPONSE" | jq -r .txid)
+            echo ""
+            echo "Shielded send successful"
+            echo "TXID: ${TXID:0:16}..."
+          else
+            echo ""
+            echo "Shielded send failed"
             exit 1
           fi
           echo ""
@@ -162,22 +216,34 @@ jobs:
         if: always()
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "  Wallet Status"
+          echo "  Final Wallet Status"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
           
-          docker exec zeckit-zingo-wallet bash -c "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo --server http://zaino:9067 --chain regtest --nosync" 2>/dev/null || echo "Could not retrieve balance"
+          curl -s http://127.0.0.1:8080/stats | jq '{
+            total: .current_balance,
+            transparent: .transparent_balance,
+            orchard: .orchard_balance,
+            total_requests: .total_requests,
+            total_sent: .total_sent
+          }' || echo "Could not retrieve wallet stats"
           echo ""
       
-      - name: Check faucet status
+      - name: Check blockchain status
         if: always()
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "  Faucet Status"
+          echo "  Blockchain Status"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
           
-          curl -s http://127.0.0.1:8080/stats | jq . || echo "Could not get faucet stats"
+          BLOCKS=$(curl -s http://127.0.0.1:8232 -X POST \
+            -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"1.0","id":"1","method":"getblockcount","params":[]}' | jq .result)
+          
+          echo "Block height: $BLOCKS"
+          echo "Network: Regtest"
+          echo "Mining: Continuous (1 block / 15s)"
           echo ""
       
       - name: Collect logs
@@ -188,12 +254,16 @@ jobs:
           
           docker compose logs zebra > logs/zebra.log 2>&1 || true
           docker compose logs zaino > logs/zaino.log 2>&1 || true
-          docker compose logs zingo-wallet-zaino > logs/zingo-wallet.log 2>&1 || true
-          docker compose logs faucet-zaino > logs/faucet.log 2>&1 || true
+          docker compose logs faucet > logs/faucet.log 2>&1 || true
           docker ps -a > logs/containers.log 2>&1 || true
           docker network ls > logs/networks.log 2>&1 || true
           
-          echo "✓ Logs collected"
+          # Copy fixtures if they exist
+          if [ -f fixtures/unified-addresses.json ]; then
+            cp fixtures/unified-addresses.json logs/ || true
+          fi
+          
+          echo "Logs collected"
       
       - name: Upload logs on failure
         if: failure()
@@ -211,10 +281,10 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
           
-          echo "Stopping containers (keeping images for next run)..."
-          docker compose down --remove-orphans 2>/dev/null || true
+          echo "Stopping containers..."
+          ./cli/target/release/zeckit down || docker compose down --remove-orphans
           
-          echo "✓ Cleanup complete"
+          echo "Cleanup complete"
           echo ""
       
       - name: Test summary
@@ -227,19 +297,23 @@ jobs:
           echo ""
           
           if [ "${{ job.status }}" == "success" ]; then
-            echo "✓ Status: ALL TESTS PASSED ✓"
+            echo "Status: ALL TESTS PASSED"
             echo ""
             echo "Completed checks:"
-            echo "  ✓ Docker Desktop started"
-            echo "  ✓ CLI binary built"
-            echo "  ✓ Devnet started (clean state, cached images)"
-            echo "  ✓ Smoke tests passed"
-            echo "  ✓ Wallet synced"
-            echo "  ✓ Faucet operational"
+            echo "  - Docker Desktop started"
+            echo "  - CLI binary built"
+            echo "  - Devnet started (Zaino backend)"
+            echo "  - Mining address configured"
+            echo "  - 201 blocks mined (101 + 100 maturity)"
+            echo "  - Wallet synced"
+            echo "  - Funds shielded to Orchard"
+            echo "  - All 6 smoke tests passed"
+            echo "  - Manual shielded send successful"
+            echo "  - Continuous mining active"
             echo ""
-            echo "The ZecKit devnet is working correctly!"
+            echo "The ZecKit devnet is working correctly"
           else
-            echo "✗ Status: TESTS FAILED ✗"
+            echo "Status: TESTS FAILED"
             echo ""
             echo "Check the logs above for details"
             echo "Artifact logs: e2e-test-logs-${{ github.run_number }}"
