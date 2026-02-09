@@ -1,6 +1,7 @@
-use crate::error::{Result, zeckitError};
-use std::process::{Command, Stdio};
+use crate::error::{zeckitError, Result};
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
 use std::thread;
 
 #[derive(Clone)]
@@ -55,11 +56,11 @@ impl DockerCompose {
             .arg("--images")
             .current_dir(&self.project_dir)
             .output();
-        
+
         match output {
             Ok(out) if out.status.success() => {
                 let images = String::from_utf8_lossy(&out.stdout);
-                
+
                 // Check each image exists locally
                 for image in images.lines() {
                     let check = Command::new("docker")
@@ -69,41 +70,58 @@ impl DockerCompose {
                         .stdout(Stdio::null())
                         .stderr(Stdio::null())
                         .status();
-                    
+
                     if check.map(|s| !s.success()).unwrap_or(true) {
                         return false; // At least one image missing
                     }
                 }
-                
+
                 true // All images exist
             }
-            _ => false
+            _ => false,
         }
     }
 
     /// Start services with profile, building only if needed
     pub fn up_with_profile(&self, profile: &str, force_build: bool) -> Result<()> {
         let needs_build = force_build || !self.images_exist(profile);
-        
+
         if needs_build {
             println!("Building Docker images for profile '{}'...", profile);
             println!("(This may take 10-20 minutes on first build)");
             println!();
-            
-            // Build images silently
+
+            // Capture build output to a log file; only surface details on failure
+            let logs_dir = format!("{}/logs", self.project_dir);
+            let _ = fs::create_dir_all(&logs_dir);
+            let log_path = format!("{}/docker-build-{}.log", logs_dir, profile);
+
+            let log_file = File::create(&log_path)
+                .map_err(|e| zeckitError::Docker(format!("Could not create build log: {}", e)))?;
+            let log_file_err = log_file.try_clone().map_err(|e| {
+                zeckitError::Docker(format!("Could not clone build log handle: {}", e))
+            })?;
+
             let build_status = Command::new("docker")
                 .arg("compose")
                 .arg("--profile")
                 .arg(profile)
                 .arg("build")
-                .arg("-q")  // Quiet mode
                 .current_dir(&self.project_dir)
-                .stdout(Stdio::null())  // Discard stdout
-                .stderr(Stdio::null())  // Discard stderr
+                .stdout(Stdio::from(log_file))
+                .stderr(Stdio::from(log_file_err))
                 .status()
                 .map_err(|e| zeckitError::Docker(format!("Failed to start build: {}", e)))?;
 
             if !build_status.success() {
+                let tail = tail_log(&log_path, 200);
+                eprintln!("Docker image build failed. See log: {}", log_path);
+                if let Some(tail) = tail {
+                    eprintln!(
+                        "--- Build log (last 200 lines) ---\n{}\n--- end build log ---",
+                        tail
+                    );
+                }
                 return Err(zeckitError::Docker("Image build failed".into()));
             }
 
@@ -231,4 +249,12 @@ impl DockerCompose {
             .map(|output| !output.stdout.is_empty())
             .unwrap_or(false)
     }
+}
+
+fn tail_log(path: &str, max_lines: usize) -> Option<String> {
+    let file = File::open(path).ok()?;
+    let reader = BufReader::new(file);
+    let lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
+    let start = lines.len().saturating_sub(max_lines);
+    Some(lines[start..].join("\n"))
 }
