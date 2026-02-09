@@ -44,30 +44,76 @@ impl DockerCompose {
         Ok(())
     }
 
-    pub fn up_with_profile(&self, profile: &str) -> Result<()> {
-        println!("Building Docker images for profile '{}'...", profile);
-        println!("(This may take 10-20 minutes on first build)");
-        println!();
-        
-        // Build images silently
-        let build_status = Command::new("docker")
+    /// Check if Docker images exist for a profile
+    pub fn images_exist(&self, profile: &str) -> bool {
+        // Get list of images that would be used by this profile
+        let output = Command::new("docker")
             .arg("compose")
             .arg("--profile")
             .arg(profile)
-            .arg("build")
-            .arg("-q")  // Quiet mode
+            .arg("config")
+            .arg("--images")
             .current_dir(&self.project_dir)
-            .stdout(Stdio::null())  // Discard stdout
-            .stderr(Stdio::null())  // Discard stderr
-            .status()
-            .map_err(|e| zeckitError::Docker(format!("Failed to start build: {}", e)))?;
-
-        if !build_status.success() {
-            return Err(zeckitError::Docker("Image build failed".into()));
+            .output();
+        
+        match output {
+            Ok(out) if out.status.success() => {
+                let images = String::from_utf8_lossy(&out.stdout);
+                
+                // Check each image exists locally
+                for image in images.lines() {
+                    let check = Command::new("docker")
+                        .arg("image")
+                        .arg("inspect")
+                        .arg(image.trim())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                    
+                    if check.map(|s| !s.success()).unwrap_or(true) {
+                        return false; // At least one image missing
+                    }
+                }
+                
+                true // All images exist
+            }
+            _ => false
         }
+    }
 
-        println!("✓ Images built successfully");
-        println!();
+    /// Start services with profile, building only if needed
+    pub fn up_with_profile(&self, profile: &str, force_build: bool) -> Result<()> {
+        let needs_build = force_build || !self.images_exist(profile);
+        
+        if needs_build {
+            println!("Building Docker images for profile '{}'...", profile);
+            println!("(This may take 10-20 minutes on first build)");
+            println!();
+            
+            // Build images silently
+            let build_status = Command::new("docker")
+                .arg("compose")
+                .arg("--profile")
+                .arg(profile)
+                .arg("build")
+                .arg("-q")  // Quiet mode
+                .current_dir(&self.project_dir)
+                .stdout(Stdio::null())  // Discard stdout
+                .stderr(Stdio::null())  // Discard stderr
+                .status()
+                .map_err(|e| zeckitError::Docker(format!("Failed to start build: {}", e)))?;
+
+            if !build_status.success() {
+                return Err(zeckitError::Docker("Image build failed".into()));
+            }
+
+            println!("✓ Images built successfully");
+            println!();
+        } else {
+            println!("✓ Using cached Docker images (already built)");
+            println!("  Use --fresh to force rebuild");
+            println!();
+        }
 
         // Start services
         println!("Starting containers...");

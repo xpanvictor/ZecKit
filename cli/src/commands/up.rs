@@ -5,12 +5,14 @@ use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::Client;
 use serde_json::json;
-use std::process::Command;
 use std::fs;
 use std::io::{self, Write};
 use tokio::time::{sleep, Duration};
 
 const MAX_WAIT_SECONDS: u64 = 60000;
+
+// Known transparent address from default seed "abandon abandon abandon..."
+const DEFAULT_FAUCET_ADDRESS: &str = "tmBsTi2xWTjUdEXnuTceL7fecEQKeWaPDJd";
 
 pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan());
@@ -21,7 +23,7 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     let compose = DockerCompose::new()?;
     
     if fresh {
-        println!("{}", "Cleaning up old data...".yellow());
+        println!("{}", "🧹 Cleaning up old data (fresh start)...".yellow());
         compose.down(true)?;
     }
     
@@ -40,26 +42,31 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     println!("Starting services: {}", services.join(", "));
     println!();
     
-    // Build and start services with progress
+    // ========================================================================
+    // STEP 1: Pre-configure zebra.toml BEFORE starting any containers
+    // ========================================================================
+    println!("📝 Configuring Zebra mining address...");
+    
+    match update_zebra_config_file(DEFAULT_FAUCET_ADDRESS) {
+        Ok(_) => {
+            println!("✓ Updated docker/configs/zebra.toml");
+            println!("  Mining to: {}", DEFAULT_FAUCET_ADDRESS);
+        }
+        Err(e) => {
+            println!("{}", format!("Warning: Could not update zebra.toml: {}", e).yellow());
+            println!("  Using existing config");
+        }
+    }
+    println!();
+    
+    // ========================================================================
+    // STEP 2: Build and start services (smart build - only when needed)
+    // ========================================================================
     if backend == "lwd" {
-        println!("Building Docker images...");
-        println!();
-        
-        println!("[1/3] Building Zebra...");
-        println!("[2/3] Building Lightwalletd...");
-        println!("[3/3] Building Faucet...");
-        
-        compose.up_with_profile("lwd")?;
+        compose.up_with_profile("lwd", fresh)?;
         println!();
     } else if backend == "zaino" {
-        println!("Building Docker images...");
-        println!();
-        
-        println!("[1/3] Building Zebra...");
-        println!("[2/3] Building Zaino...");
-        println!("[3/3] Building Faucet...");
-        
-        compose.up_with_profile("zaino")?;
+        compose.up_with_profile("zaino", fresh)?;
         println!();
     } else {
         compose.up(&services)?;
@@ -75,7 +82,9 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
             .unwrap()
     );
     
-    // [1/3] Zebra with percentage
+    // ========================================================================
+    // STEP 3: Wait for Zebra
+    // ========================================================================
     let checker = HealthChecker::new();
     let start = std::time::Instant::now();
     
@@ -99,7 +108,9 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     }
     println!();
     
-    // [2/3] Backend with percentage
+    // ========================================================================
+    // STEP 4: Wait for Backend (if using lwd or zaino)
+    // ========================================================================
     if backend == "lwd" || backend == "zaino" {
         let backend_name = if backend == "lwd" { "Lightwalletd" } else { "Zaino" };
         let start = std::time::Instant::now();
@@ -125,7 +136,9 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
         println!();
     }
     
-    // [3/3] Faucet with percentage (faucet now contains zingolib)
+    // ========================================================================
+    // STEP 5: Wait for Faucet
+    // ========================================================================
     let start = std::time::Instant::now();
     loop {
         pb.tick();
@@ -149,40 +162,52 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     
     pb.finish_and_clear();
     
-    // GET WALLET ADDRESS FROM FAUCET API (not from zingo-wallet container)
+    // ========================================================================
+    // STEP 6: Verify wallet address matches configured address
+    // ========================================================================
     println!();
-    println!("Configuring Zebra to mine to wallet...");
+    println!("🔍 Verifying wallet configuration...");
     
     match get_wallet_transparent_address_from_faucet().await {
-        Ok(t_address) => {
-            println!("Wallet transparent address: {}", t_address);
-            
-            if let Err(e) = update_zebra_miner_address(&t_address) {
-                println!("{}", format!("Warning: Could not update zebra.toml: {}", e).yellow());
+        Ok(addr) => {
+            println!("✓ Faucet wallet address: {}", addr);
+            if addr != DEFAULT_FAUCET_ADDRESS {
+                println!("{}", format!("⚠ Warning: Address mismatch!").yellow());
+                println!("{}", format!("  Expected: {}", DEFAULT_FAUCET_ADDRESS).yellow());
+                println!("{}", format!("  Got:      {}", addr).yellow());
+                println!("{}", "  This may cause funds to be lost!".yellow());
             } else {
-                println!("Updated zebra.toml miner_address");
-                
-                println!("Restarting Zebra with new miner address...");
-                if let Err(e) = restart_zebra().await {
-                    println!("{}", format!("Warning: Zebra restart had issues: {}", e).yellow());
-                }
+                println!("✓ Address matches Zebra mining configuration");
             }
         }
         Err(e) => {
-            println!("{}", format!("Warning: Could not get wallet address: {}", e).yellow());
-            println!("  Mining will use default address in zebra.toml");
+            println!("{}", format!("Warning: Could not verify wallet address: {}", e).yellow());
         }
     }
+    println!();
     
-    // NOW WAIT FOR BLOCKS (mining to correct address)
+    // ========================================================================
+    // STEP 7: Mine initial blocks
+    // ========================================================================
     wait_for_mined_blocks(&pb, 101).await?;
     
-    // Wait extra time for coinbase maturity
+    // ========================================================================
+    // STEP 8: Mine additional blocks for full maturity
+    // ========================================================================
     println!();
-    println!("Waiting for coinbase maturity (100 confirmations)...");
-    sleep(Duration::from_secs(120)).await;
+    println!("Mining additional blocks for maturity...");
+    mine_additional_blocks(100).await?;
     
-    // Generate UA fixtures from faucet API
+    // ========================================================================
+    // STEP 9: Wait for blocks to propagate
+    // ========================================================================
+    println!();
+    println!("Waiting for blocks to propagate...");
+    sleep(Duration::from_secs(10)).await;
+    
+    // ========================================================================
+    // STEP 10: Generate UA fixtures from faucet API
+    // ========================================================================
     println!();
     println!("Generating ZIP-316 Unified Address fixtures...");
     
@@ -192,51 +217,181 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
         }
         Err(e) => {
             println!("{}", format!("Warning: Could not generate UA fixture ({})", e).yellow());
-            println!("  You can manually update fixtures/unified-addresses.json");
         }
     }
     
-    // Sync wallet through faucet API
+    // ========================================================================
+    // STEP 11: Sync wallet through faucet API
+    // ========================================================================
     println!();
     println!("Syncing wallet with blockchain...");
+    
+    // Give wallet time to catch up with mined blocks
+    sleep(Duration::from_secs(5)).await;
+    
     if let Err(e) = sync_wallet_via_faucet().await {
         println!("{}", format!("Wallet sync warning: {}", e).yellow());
+        println!("  Will retry after waiting...");
+        sleep(Duration::from_secs(10)).await;
+        
+        // Retry once
+        if let Err(e) = sync_wallet_via_faucet().await {
+            println!("{}", format!("Wallet sync still failing: {}", e).yellow());
+        } else {
+            println!("✓ Wallet synced on retry");
+        }
     } else {
-        println!("Wallet synced with blockchain");
+        println!("✓ Wallet synced with blockchain");
     }
     
-    // Check balance
+    // Wait for sync to complete
+    sleep(Duration::from_secs(5)).await;
+    
+    // ========================================================================
+    // STEP 12: Check balance BEFORE shielding
+    // ========================================================================
     println!();
-    println!("Checking wallet balance...");
+    println!("Checking transparent balance...");
     match check_wallet_balance().await {
-        Ok(balance) if balance > 0.0 => {
-            println!("Wallet has {} ZEC available", balance);
-        }
-        Ok(_) => {
-            println!("{}", "Wallet synced but balance not yet available".yellow());
-            println!("  Blocks still maturing, wait a few more minutes");
+        Ok((transparent, orchard, total)) => {
+            println!("  Transparent: {} ZEC", transparent);
+            println!("  Orchard: {} ZEC", orchard);
+            println!("  Total: {} ZEC", total);
+            
+            if transparent == 0.0 && total == 0.0 {
+                println!();
+                println!("{}", "⚠ WARNING: Wallet has no funds!".yellow().bold());
+                println!("{}", "  This means Zebra did NOT mine to the faucet wallet address.".yellow());
+                println!("{}", "  Possible causes:".yellow());
+                println!("{}", "    1. Zebra config wasn't updated properly".yellow());
+                println!("{}", "    2. Wallet seed mismatch".yellow());
+                println!("{}", "  The devnet will still work, but the faucet won't have funds.".yellow());
+            }
         }
         Err(e) => {
             println!("{}", format!("Could not check balance: {}", e).yellow());
         }
     }
     
+    // ========================================================================
+    // STEP 13: Shield transparent funds to orchard
+    // ========================================================================
+    println!();
+    if let Err(e) = shield_transparent_funds().await {
+        println!("{}", format!("Shield operation: {}", e).yellow());
+    } else {
+        // Sync again after shielding
+        println!("Re-syncing after shielding...");
+        sleep(Duration::from_secs(15)).await;
+        
+        if let Err(e) = sync_wallet_via_faucet().await {
+            println!("{}", format!("Warning: Post-shield sync failed: {}", e).yellow());
+        } else {
+            println!("✓ Post-shield sync complete");
+        }
+        
+        sleep(Duration::from_secs(5)).await;
+    }
+    
+    // ========================================================================
+    // STEP 14: Final balance check
+    // ========================================================================
+    println!();
+    println!("Final wallet balance:");
+    match check_wallet_balance().await {
+        Ok((transparent, orchard, total)) => {
+            println!("  Transparent: {} ZEC", transparent);
+            println!("  Orchard: {} ZEC", orchard);
+            println!("  Total: {} ZEC", total);
+            
+            if total > 0.0 {
+                println!();
+                println!("{}", "✓ Faucet wallet funded and ready!".green().bold());
+            }
+        }
+        Err(e) => {
+            println!("{}", format!("Could not check balance: {}", e).yellow());
+        }
+    }
+    
+    // ========================================================================
+    // STEP 15: Start background miner
+    // ========================================================================
+    println!();
+    println!("Starting continuous background miner (1 block every 15s)...");
+    start_background_miner().await?;
+    
     print_connection_info(&backend);
     print_mining_info().await?;
+    
+    println!();
+    println!("{}", "✓ Devnet is running with continuous mining".green().bold());
+    println!("{}", "   New blocks will be mined every 15 seconds".green());
+    println!("{}", "   Press Ctrl+C to stop".green());
     
     Ok(())
 }
 
-async fn wait_for_mined_blocks(pb: &ProgressBar, min_blocks: u64) -> Result<()> {
+// ============================================================================
+// NEW FUNCTION: Update zebra.toml on host before starting containers
+// ============================================================================
+fn update_zebra_config_file(address: &str) -> Result<()> {
+    use regex::Regex;
+    
+    // Get project root (same logic as DockerCompose::new())
+    let current_dir = std::env::current_dir()?;
+    let project_dir = if current_dir.ends_with("cli") {
+        current_dir.parent().unwrap().to_path_buf()
+    } else {
+        current_dir.clone()
+    };
+    
+    let config_path = project_dir.join("docker/configs/zebra.toml");
+    
+    // Read current config
+    let config = fs::read_to_string(&config_path)
+        .map_err(|e| zeckitError::Config(format!("Could not read {:?}: {}", config_path, e)))?;
+    
+    // Update miner address using regex
+    let updated = if config.contains("miner_address") {
+        // Replace existing miner_address
+        let re = Regex::new(r#"miner_address\s*=\s*"[^"]*""#)
+            .map_err(|e| zeckitError::Config(format!("Regex error: {}", e)))?;
+        re.replace(&config, format!("miner_address = \"{}\"", address)).to_string()
+    } else {
+        // Add miner_address to [mining] section
+        if config.contains("[mining]") {
+            config.replace(
+                "[mining]",
+                &format!("[mining]\nminer_address = \"{}\"", address)
+            )
+        } else {
+            // Add entire [mining] section at the end
+            format!("{}\n\n[mining]\nminer_address = \"{}\"\n", config, address)
+        }
+    };
+    
+    // Write back to file
+    fs::write(&config_path, updated)
+        .map_err(|e| zeckitError::Config(format!("Could not write {:?}: {}", config_path, e)))?;
+    
+    Ok(())
+}
+
+// ============================================================================
+// Helper Functions (keep all your existing functions below)
+// ============================================================================
+
+async fn wait_for_mined_blocks(_pb: &ProgressBar, min_blocks: u64) -> Result<()> {
     let client = Client::new();
     let start = std::time::Instant::now();
     
-    println!("Mining blocks to maturity...");
+    println!("Mining initial blocks...");
     
     loop {
         match get_block_count(&client).await {
             Ok(height) if height >= min_blocks => {
-                println!("Mined {} blocks (coinbase maturity reached)", height);
+                println!("✓ Mined {} blocks", height);
                 println!();
                 return Ok(());
             }
@@ -256,6 +411,87 @@ async fn wait_for_mined_blocks(pb: &ProgressBar, min_blocks: u64) -> Result<()> 
         
         sleep(Duration::from_secs(2)).await;
     }
+}
+
+async fn mine_additional_blocks(count: u32) -> Result<()> {
+    let client = Client::new();
+    
+    println!("Mining {} additional blocks...", count);
+    
+    for i in 1..=count {
+        let _ = client
+            .post("http://127.0.0.1:8232")
+            .json(&json!({
+                "jsonrpc": "2.0",
+                "id": "generate",
+                "method": "generate",
+                "params": [1]
+            }))
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await;
+        
+        if i % 10 == 0 {
+            print!("\r  Mined {} / {} blocks", i, count);
+            io::stdout().flush().ok();
+        }
+    }
+    
+    println!("\n✓ Mined {} additional blocks", count);
+    Ok(())
+}
+
+async fn start_background_miner() -> Result<()> {
+    tokio::spawn(async {
+        let client = Client::new();
+        let mut interval = tokio::time::interval(Duration::from_secs(15));
+        
+        loop {
+            interval.tick().await;
+            
+            let _ = client
+                .post("http://127.0.0.1:8232")
+                .json(&json!({
+                    "jsonrpc": "2.0",
+                    "id": "bgminer",
+                    "method": "generate",
+                    "params": [1]
+                }))
+                .timeout(Duration::from_secs(10))
+                .send()
+                .await;
+        }
+    });
+    
+    Ok(())
+}
+
+async fn shield_transparent_funds() -> Result<()> {
+    let client = Client::new();
+    
+    println!("Shielding transparent funds to Orchard...");
+    
+    let resp = client
+        .post("http://127.0.0.1:8080/shield")
+        .timeout(Duration::from_secs(60))
+        .send()
+        .await?;
+    
+    let json: serde_json::Value = resp.json().await?;
+    
+    if json["status"] == "no_funds" {
+        return Err(zeckitError::HealthCheck("No transparent funds to shield".into()));
+    }
+    
+    if let Some(txid) = json.get("txid").and_then(|v| v.as_str()) {
+        println!("✓ Shielded {} ZEC", json["transparent_amount"].as_f64().unwrap_or(0.0));
+        println!("  Transaction ID: {}", txid);
+        println!("  Waiting for confirmation...");
+        sleep(Duration::from_secs(20)).await;
+        return Ok(());
+    }
+    
+    Err(zeckitError::HealthCheck("Shield transaction failed".into()))
 }
 
 async fn get_block_count(client: &Client) -> Result<u64> {
@@ -278,11 +514,9 @@ async fn get_block_count(client: &Client) -> Result<u64> {
         .ok_or_else(|| zeckitError::HealthCheck("Invalid block count response".into()))
 }
 
-// NEW: Get wallet address from faucet API instead of zingo-wallet container
 async fn get_wallet_transparent_address_from_faucet() -> Result<String> {
     let client = Client::new();
     
-    // Call faucet API to get transparent address
     let resp = client
         .get("http://127.0.0.1:8080/address")
         .timeout(Duration::from_secs(10))
@@ -298,45 +532,6 @@ async fn get_wallet_transparent_address_from_faucet() -> Result<String> {
         .map(|s| s.to_string())
 }
 
-fn update_zebra_miner_address(address: &str) -> Result<()> {
-    let zebra_config_path = "docker/configs/zebra.toml";
-    
-    let config = fs::read_to_string(zebra_config_path)
-        .map_err(|e| zeckitError::Config(format!("Could not read zebra.toml: {}", e)))?;
-    
-    let new_config = if config.contains("miner_address") {
-        use regex::Regex;
-        let re = Regex::new(r#"miner_address = "tm[a-zA-Z0-9]+""#).unwrap();
-        re.replace(&config, format!("miner_address = \"{}\"", address)).to_string()
-    } else {
-        config.replace(
-            "[mining]",
-            &format!("[mining]\nminer_address = \"{}\"", address)
-        )
-    };
-    
-    fs::write(zebra_config_path, new_config)
-        .map_err(|e| zeckitError::Config(format!("Could not write zebra.toml: {}", e)))?;
-    
-    Ok(())
-}
-
-async fn restart_zebra() -> Result<()> {
-    let output = Command::new("docker")
-        .args(&["restart", "zeckit-zebra"])
-        .output()
-        .map_err(|e| zeckitError::Docker(format!("Failed to restart Zebra: {}", e)))?;
-    
-    if !output.status.success() {
-        return Err(zeckitError::Docker("Zebra restart failed".into()));
-    }
-    
-    sleep(Duration::from_secs(15)).await;
-    
-    Ok(())
-}
-
-// NEW: Get UA from faucet API instead of zingo-wallet container
 async fn generate_ua_fixtures_from_faucet() -> Result<String> {
     let client = Client::new();
     
@@ -368,26 +563,28 @@ async fn generate_ua_fixtures_from_faucet() -> Result<String> {
     Ok(ua_address.to_string())
 }
 
-// NEW: Sync wallet via faucet API instead of zingo-wallet container
 async fn sync_wallet_via_faucet() -> Result<()> {
     let client = Client::new();
     
-    // Call faucet's sync endpoint
     let resp = client
         .post("http://127.0.0.1:8080/sync")
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(60))
         .send()
         .await
         .map_err(|e| zeckitError::HealthCheck(format!("Faucet sync failed: {}", e)))?;
     
     if !resp.status().is_success() {
-        return Err(zeckitError::HealthCheck("Wallet sync error via faucet API".into()));
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(zeckitError::HealthCheck(
+            format!("Wallet sync failed ({}): {}", status, body)
+        ));
     }
     
     Ok(())
 }
 
-async fn check_wallet_balance() -> Result<f64> {
+async fn check_wallet_balance() -> Result<(f64, f64, f64)> {
     let client = Client::new();
     let resp = client
         .get("http://127.0.0.1:8080/stats")
@@ -396,7 +593,12 @@ async fn check_wallet_balance() -> Result<f64> {
         .await?;
     
     let json: serde_json::Value = resp.json().await?;
-    Ok(json["current_balance"].as_f64().unwrap_or(0.0))
+    
+    let transparent = json["transparent_balance"].as_f64().unwrap_or(0.0);
+    let orchard = json["orchard_balance"].as_f64().unwrap_or(0.0);
+    let total = json["current_balance"].as_f64().unwrap_or(0.0);
+    
+    Ok((transparent, orchard, total))
 }
 
 async fn print_mining_info() -> Result<()> {
@@ -410,8 +612,7 @@ async fn print_mining_info() -> Result<()> {
         println!();
         println!("  Block Height: {}", height);
         println!("  Network: Regtest");
-        println!("  Mining: Active (internal miner)");
-        println!("  Pre-mined Funds: Available");
+        println!("  Mining: Continuous (1 block / 15s)");
     }
     
     Ok(())
@@ -434,7 +635,8 @@ fn print_connection_info(backend: &str) {
     
     println!();
     println!("Next steps:");
-    println!("  • Run tests: zeckit test");
+    println!("  • Check balance: curl http://127.0.0.1:8080/stats");
     println!("  • View fixtures: cat fixtures/unified-addresses.json");
+    println!("  • Request funds: curl -X POST http://127.0.0.1:8080/request -d '{{\"address\":\"...\"}}'");
     println!();
 }

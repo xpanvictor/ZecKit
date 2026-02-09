@@ -2,11 +2,11 @@
 
 ## System Overview
 
-ZecKit is a containerized development toolkit for building on Zcash's Zebra node. It provides a one-command devnet with pre-funded wallets, UA fixtures, and automated testing.
+ZecKit is a containerized development toolkit for Zcash that provides  shielded transactions on a local regtest network. It enables developers to test Orchard shielded sends without connecting to testnet or mainnet.
 
 ---
 
-## High-Level Architecture (M2)
+## High-Level Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -14,245 +14,301 @@ ZecKit is a containerized development toolkit for building on Zcash's Zebra node
 │                      (zeckit-network)                        │
 │                                                              │
 │  ┌──────────────┐         ┌──────────────┐                 │
-│  │    Zebra     │◄────────┤   Faucet     │                 │
-│  │  (Rust)      │  RPC    │  (Python)    │                 │
-│  │  regtest     │  8232   │  Flask       │                 │
-│  │              │         │  :8080       │                 │
+│  │    Zebra     │         │   Faucet     │                 │
+│  │  (Rust)      │  RPC    │  (Rust)      │                 │
+│  │  regtest     │  8232   │  Axum+       │                 │
+│  │              │         │  Zingolib    │                 │
+│  │ Auto-mining  │         │  :8080       │                 │
 │  └──────┬───────┘         └──────┬───────┘                 │
 │         │                        │                          │
 │         │                        │                          │
-│         │                        ▼                          │
-│         │              ┌─────────────────┐                 │
-│         │              │  Docker Socket  │                 │
-│         │              │  (for exec)     │                 │
-│         │              └─────────────────┘                 │
-│         │                        │                          │
 │         ▼                        ▼                          │
 │  ┌──────────────┐      ┌──────────────┐                   │
-│  │ Lightwalletd │◄─────┤ Zingo Wallet │                   │
-│  │  (Go)        │      │  (Rust)      │                   │
-│  │  gRPC :9067  │      │  CLI         │                   │
+│  │ Zaino (Rust) │      │ Embedded     │                   │
+│  │   gRPC :9067 │      │ Zingolib     │                   │
+│  │              │      │ Wallet       │                   │
 │  └──────────────┘      └──────────────┘                   │
-│                                                              │
-│  Volumes:                                                   │
-│  • zebra-data       - Blockchain state                     │
-│  • zingo-data       - Wallet database                      │
-│  • lightwalletd-data - LWD cache                           │
+│         OR                                                  │
+│  ┌──────────────┐                                          │
+│  │Lightwalletd  │                                          │
+│  │   (Go)       │                                          │
+│  │   gRPC :9067 │                                          │
+│  └──────────────┘                                          │
 └─────────────────────────────────────────────────────────────┘
                             ▲
                             │
                        ┌────┴────┐
-                       │ zeckit  │  (Rust CLI)
-                       │ up/down │
+                       │ zeckit  │  (Rust CLI - test runner)
                        │  test   │
                        └─────────┘
 ```
 
 ---
 
-## Component Details
+## Component Architecture
 
 ### 1. Zebra Node
 
-**Purpose:** Core Zcash full node in regtest mode
-
-**Technology:** Rust
+**Technology:** Rust  
+**Role:** Full Zcash node with internal miner  
+**Port:** 8232 (RPC)
 
 **Responsibilities:**
-- Validate blocks and transactions
-- Provide RPC interface (port 8232)
-- Run internal miner for block generation
-- Maintain blockchain state
+- Validate and store blockchain
+- Provide RPC interface
+- Auto-mine blocks (regtest mode)
+- Broadcast transactions
 
-**Configuration:**
-- Network: Regtest
-- RPC: Enabled (no auth for dev)
-- Internal Miner: Enabled
-- Checkpoint sync: Disabled
+**Key Features:**
+- Internal Miner: Automatically generates blocks every 30-60 seconds
+- Regtest Mode: Isolated test network with NU6.1 activated
+- No Checkpoint Sync: Allows genesis start for clean testing
+- Coinbase Mining: Rewards go to faucet's transparent address
 
-**Docker Image:** Custom build from `ZcashFoundation/zebra`
-
-**Key Files:**
-- `/etc/zebrad/zebrad.toml` - Configuration
-- `/var/zebra/` - Blockchain data
+**Configuration Flow:**
+```
+zebra.toml
+    ├── [network] = "Regtest"
+    ├── [rpc] listen_addr = "0.0.0.0:8232"
+    └── [mining]
+        ├── internal_miner = true
+        └── miner_address = "tmBsTi2xWTjUdEXnuTceL7fecEQKeWaPDJd"
+```
 
 ---
 
-### 2. Lightwalletd
+### 2. Zaino Indexer
 
-**Purpose:** Light client protocol server (gRPC)
-
-**Technology:** Go
+**Technology:** Rust  
+**Role:** Light client protocol server (lightwalletd-compatible)  
+**Port:** 9067 (gRPC)
 
 **Responsibilities:**
-- Bridge between light clients and Zebra
-- Serve compact blocks via gRPC
+- Index blockchain data from Zebra
+- Serve compact blocks to wallet
 - Provide transaction broadcast API
-- Cache blockchain data
+- Cache shielded note commitments
 
-**Configuration:**
-- RPC Host: zebra:8232
-- gRPC Port: 9067
-- TLS: Disabled (dev only)
+**Advantages:**
+- 30% faster sync than lightwalletd
+- Better error messages
+- More reliable with rapid block generation
+- Memory-safe (Rust)
 
-**Docker Image:** `electriccoinco/lightwalletd:latest`
+**Data Flow:**
+```
+Zebra → Zaino → Wallet (Zingolib)
+  │       │
+  │       └──── Indexes: Blocks, Transactions, Notes
+  └─────────── Broadcasts: New transactions
+```
 
 ---
 
-### 3. Zingo Wallet
+### 3. Lightwalletd Server
 
-**Purpose:** Official Zcash wallet with CLI
-
-**Technology:** Rust (ZingoLib)
+**Technology:** Go  
+**Role:** Light client protocol server (original implementation)  
+**Port:** 9067 (gRPC)
 
 **Responsibilities:**
-- Generate unified addresses
-- Sign and broadcast transactions
-- Sync with lightwalletd
-- Manage wallet state
+- Index blockchain data from Zebra
+- Serve compact blocks to wallet
+- Provide transaction broadcast API
+- Cache shielded note commitments
 
 **Configuration:**
-- Data dir: `/var/zingo`
-- Server: http://lightwalletd:9067
-- Network: Regtest
+```
+Zebra RPC: zebra:8232
+gRPC Bind: 0.0.0.0:9067
+TLS: Disabled (dev only)
+```
 
-**Docker Image:** Custom build from `zingolabs/zingolib`
-
-**Key Files:**
-- `/var/zingo/zingo-wallet.dat` - Wallet database
-- `/var/zingo/wallets/` - Wallet subdirectory
+**Healthcheck Fix:**
+- Changed from grpc_health_probe to TCP port check
+- More reliable for regtest environment
 
 ---
 
 ### 4. Faucet Service
 
-**Purpose:** REST API for test funds and fixtures
+**Technology:** Rust + Axum + Zingolib  
+**Role:** REST API with embedded shielded wallet  
+**Port:** 8080 (HTTP)
 
-**Technology:** Python 3.11 + Flask + Gunicorn
+**Architecture:**
 
-**Responsibilities:**
-- Serve test ZEC via REST API
-- Generate UA fixtures
-- Track balance and history
-- Provide health checks
+```
+┌──────────────────────────┐
+│     Axum HTTP Server     │
+│         :8080            │
+└────────┬─────────────────┘
+         │
+         ▼
+┌──────────────────────────┐
+│   API Handlers           │
+│  • /health               │
+│  • /stats                │
+│  • /address              │
+│  • /sync                 │
+│  • /shield               │
+│  • /send                 │
+└────────┬─────────────────┘
+         │
+         ▼
+┌──────────────────────────┐
+│   WalletManager          │
+│  (Rust wrapper)          │
+│  • sync()                │
+│  • get_balance()         │
+│  • shield_to_orchard()   │
+│  • send_transaction()    │
+└────────┬─────────────────┘
+         │
+         ▼
+┌──────────────────────────┐
+│   Zingolib LightClient   │
+│  (Embedded library)      │
+│  • Create transactions   │
+│  • Sign with keys        │
+│  • Broadcast via backend │
+└──────────────────────────┘
+```
 
-**Configuration:**
-- Port: 8080
-- Workers: 4 (Gunicorn)
-- Wallet backend: Zingo CLI (via docker exec)
+**Key Design Decisions:**
 
-**Docker Image:** Custom Python 3.11-slim + Docker CLI
-
-**Key Files:**
-- `/app/app/` - Flask application
-- `/var/zingo/` - Shared wallet data (read-only)
+1. Embedded Wallet: No external process, library directly linked
+2. Async Everything: Tokio runtime for concurrent operations
+3. Deterministic Seed: Same seed = same addresses (testing)
+4. Background Sync: Auto-sync every 60 seconds
 
 ---
 
-### 5. CLI Tool (`zeckit`)
-
-**Purpose:** Developer command-line interface
-
-**Technology:** Rust
-
-**Responsibilities:**
-- Orchestrate Docker Compose
-- Run health checks
-- Execute smoke tests
-- Manage service lifecycle
-
-**Commands:**
-- `up` - Start services
-- `down` - Stop services  
-- `test` - Run smoke tests
-- `status` - Check service health
-
-**Key Files:**
-- `cli/src/commands/` - Command implementations
-- `cli/src/docker/` - Docker Compose wrapper
-
----
-
-## Data Flow
+## Data Flow Diagrams
 
 ### Startup Sequence
 
 ```
-1. User runs: zeckit up --backend=lwd
+1. zeckit up --backend zaino
    │
-   ├─► CLI starts Docker Compose with lwd profile
+   ├─► Start Zebra
+   │   ├── Load regtest config
+   │   ├── Initialize blockchain from genesis
+   │   └── Start internal miner
    │
-   ├─► Zebra starts, mines 101+ blocks
-   │   └─► Internal miner: 5-60 sec per block
+   ├─► Start Zaino
+   │   ├── Connect to Zebra RPC
+   │   ├── Wait for Zebra to be ready
+   │   └── Start indexing blocks
    │
-   ├─► Lightwalletd connects to Zebra RPC
-   │   └─► Waits for Zebra sync
+   └─► Start Faucet
+       ├── Wait for Zaino to be ready
+       ├── Load or create deterministic seed
+       ├── Initialize Zingolib wallet
+       ├── Sync with blockchain
+       ├── Start background sync task
+       └── Start HTTP server on :8080
+
+[2-3 minutes later]
    │
-   ├─► Zingo Wallet starts
-   │   ├─► Generates new wallet (if none exists)
-   │   └─► Syncs with lightwalletd
-   │
-   ├─► Faucet starts
-   │   ├─► Connects to Zingo via docker exec
-   │   ├─► Gets wallet address
-   │   └─► Waits for wallet sync
-   │
-   └─► CLI verifies all services healthy
-       └─► Displays status dashboard
+   └─► Services ready
+       • Zebra mining blocks
+       • Zaino indexing
+       • Faucet has balance
 ```
 
-### Transaction Flow
+### Shield Transaction Flow
 
 ```
-1. User requests funds via API
+User Request
    │
-   ├─► POST /request {"address": "u1...", "amount": 10}
+   ├─► POST /shield
    │
-   ├─► Faucet validates request
-   │   ├─► Check balance > amount
-   │   ├─► Validate address format
-   │   └─► Apply rate limits
+   ▼
+Faucet API Handler
    │
-   ├─► Faucet calls Zingo CLI
-   │   └─► docker exec zeckit-zingo-wallet zingo-cli send ...
+   ├─► wallet.get_balance()
+   │   └── Check transparent balance > 0
    │
-   ├─► Zingo Wallet creates transaction
-   │   ├─► Selects notes
-   │   ├─► Creates proof
-   │   └─► Signs transaction
+   ├─► wallet.shield_to_orchard()
+   │   │
+   │   ├─► Zingolib: Select transparent UTXOs
+   │   ├─► Zingolib: Create Orchard note
+   │   ├─► Zingolib: Generate shielded proof
+   │   ├─► Zingolib: Sign transaction
+   │   └─► Zingolib: Broadcast via Zaino
    │
-   ├─► Lightwalletd broadcasts to Zebra
-   │   └─► Zebra adds to mempool
+   ├─► Zaino: Forward to Zebra RPC
    │
-   ├─► Internal miner includes in block
-   │   └─► Block mined (5-60 seconds)
+   ├─► Zebra: Add to mempool
    │
-   └─► Faucet returns TXID to user
+   ├─► Zebra Internal Miner: Include in next block
+   │   └── [30-60 seconds]
+   │
+   └─► Return TXID to user
+```
+
+### Shielded Send Flow
+
+```
+User Request
+   │
+   ├─► POST /send {address, amount, memo}
+   │
+   ▼
+Faucet API Handler
+   │
+   ├─► wallet.get_balance()
+   │   └── Check Orchard balance >= amount
+   │
+   ├─► wallet.send_transaction(address, amount, memo)
+   │   │
+   │   ├─► Zingolib: Select Orchard notes
+   │   ├─► Zingolib: Create output note
+   │   ├─► Zingolib: Encrypt memo
+   │   ├─► Zingolib: Generate shielded proof
+   │   ├─► Zingolib: Sign transaction
+   │   └─► Zingolib: Broadcast via Zaino
+   │
+   ├─► Zaino: Forward to Zebra RPC
+   │
+   ├─► Zebra: Add to mempool
+   │
+   ├─► Zebra Internal Miner: Include in next block
+   │   └── [30-60 seconds]
+   │
+   └─► Return TXID to user
 ```
 
 ---
 
 ## Network Configuration
 
-### Ports (Host → Container)
+### Docker Network
 
-| Service | Host Port | Container Port | Protocol |
-|---------|-----------|----------------|----------|
-| Zebra RPC | 127.0.0.1:8232 | 8232 | HTTP |
-| Faucet API | 0.0.0.0:8080 | 8080 | HTTP |
-| Lightwalletd | 127.0.0.1:9067 | 9067 | gRPC |
+**Name:** zeckit-network  
+**Type:** Bridge  
+**Subnet:** Auto-assigned by Docker
 
-### Internal Network
+### Port Mapping
 
-- **Name:** `zeckit-network`
-- **Driver:** bridge
-- **Subnet:** Auto-assigned by Docker
+| Service | Internal Port | Host Port | Protocol |
+|---------|---------------|-----------|----------|
+| Zebra RPC | 8232 | 127.0.0.1:8232 | HTTP |
+| Zaino/LWD | 9067 | 127.0.0.1:9067 | gRPC |
+| Faucet API | 8080 | 0.0.0.0:8080 | HTTP |
 
-**Container Hostnames:**
-- `zebra` → Zebra node
-- `lightwalletd` → Lightwalletd
-- `zingo-wallet` → Zingo wallet
-- `faucet` → Faucet API
+Note: Only Faucet API is exposed to LAN (0.0.0.0). Zebra and backend are localhost-only for security.
+
+### Service Discovery
+
+All services use Docker DNS for service discovery:
+
+```
+faucet → http://zaino:9067 (or http://lightwalletd:9067)
+zaino → http://zebra:8232
+lightwalletd → http://zebra:8232
+```
 
 ---
 
@@ -261,59 +317,113 @@ ZecKit is a containerized development toolkit for building on Zcash's Zebra node
 ### Docker Volumes
 
 ```
-zebra-data/
-└── state/              # Blockchain database
-    ├── rocksdb/
-    └── finalized-state.rocksdb/
+zeckit_zebra-data/
+├── state/
+│   └── rocksdb/          # Blockchain database
+│       ├── blocks/
+│       ├── state/
+│       └── finalized/
 
-zingo-data/
-└── wallets/            # Wallet database
-    └── zingo-wallet.dat
+zeckit_zaino-data/
+└── db/                   # Indexed compact blocks
+    ├── blocks.db
+    └── notes.db
 
-lightwalletd-data/
-└── db/                 # Compact block cache
+zeckit_lightwalletd-data/
+└── cache/                # Indexed data
+    └── compact-blocks/
+
+zeckit_faucet-data/
+└── wallets/              # Wallet database
+    ├── .wallet_seed      # Deterministic seed (24 words)
+    └── zingo-wallet.dat  # Encrypted wallet state
 ```
 
 ### Volume Lifecycle
 
-**Persistent (default):**
-- Volumes persist between `up`/`down`
-- Allows fast restarts
+**Default Behavior:**
+- Volumes persist across zeckit down
+- Allows fast restarts (no re-sync needed)
+- Wallet retains same addresses
 
-**Ephemeral (--purge):**
-- `zeckit down --purge` removes all volumes
-- Forces fresh blockchain mining
-- Required after breaking changes
+**Fresh Start:**
+```bash
+zeckit down
+docker volume rm zeckit_zebra-data zeckit_zaino-data zeckit_faucet-data
+zeckit up --backend zaino
+```
 
 ---
 
 ## Security Model
 
-### Development Only
+### Development Only Warning
 
-**⚠️ ZecKit is NOT production-ready:**
+ZecKit is NOT production-ready
 
-- No authentication on RPC/API
-- No TLS/HTTPS
+**Security Limitations:**
+- No authentication on any API
+- No TLS/HTTPS encryption
+- No rate limiting
 - No secret management
-- Docker socket exposed
-- Regtest mode only
+- Regtest network only (not  ZEC)
 
-### Isolation
+### Isolation Boundaries
 
-- Services run in isolated Docker network
-- Zebra RPC bound to localhost (127.0.0.1)
-- Faucet API exposed (0.0.0.0) for LAN testing
+```
+Internet
+   ↕
+Host Network
+   ↕
+┌─────────────────────────┐
+│   Docker Bridge         │
+│                         │
+│  Zebra ←→ Zaino ←→ Faucet
+│                         │
+└─────────────────────────┘
+```
 
-### Secrets
+**Exposed Ports:**
+- Faucet API: 0.0.0.0:8080 (LAN accessible)
+- Zebra RPC: 127.0.0.1:8232 (localhost only)
+- Zaino/LWD: 127.0.0.1:9067 (localhost only)
 
-**Current (M2):**
-- No secrets required
-- RPC has no authentication
+---
 
-**Future (M3+):**
-- API keys for faucet rate limiting
-- Optional RPC authentication
+## Concurrency Model
+
+### Faucet Service
+
+```
+┌──────────────────────────────┐
+│   Tokio Async Runtime        │
+│                              │
+│  ┌────────────────────────┐ │
+│  │  HTTP Server           │ │
+│  │  (Axum)                │ │
+│  │  • Concurrent requests │ │
+│  │  • Non-blocking I/O    │ │
+│  └────────────────────────┘ │
+│                              │
+│  ┌────────────────────────┐ │
+│  │  Background Tasks      │ │
+│  │  • Wallet sync (60s)   │ │
+│  │  • Health monitoring   │ │
+│  └────────────────────────┘ │
+│                              │
+│  ┌────────────────────────┐ │
+│  │  Shared State          │ │
+│  │  Arc<RwLock<Wallet>>   │ │
+│  │  • Read: Many threads  │ │
+│  │  • Write: Exclusive    │ │
+│  └────────────────────────┘ │
+└──────────────────────────────┘
+```
+
+**Locking Strategy:**
+- Reads (balance, address): Shared lock (multiple concurrent)
+- Writes (send, shield, sync): Exclusive lock (one at a time)
+- Background sync: Skips if lock unavailable (no blocking)
 
 ---
 
@@ -321,118 +431,205 @@ lightwalletd-data/
 
 ### Resource Usage
 
-| Component | CPU | Memory | Disk |
-|-----------|-----|--------|------|
-| Zebra | 1 core | 500MB | 2GB |
-| Lightwalletd | 0.2 core | 200MB | 500MB |
-| Zingo Wallet | 0.1 core | 100MB | 50MB |
-| Faucet | 0.1 core | 100MB | 10MB |
-| **Total** | **1.4 cores** | **900MB** | **2.6GB** |
+| Component | CPU (avg) | Memory | Disk I/O |
+|-----------|-----------|--------|----------|
+| Zebra | 20-50% | 500MB | Low |
+| Zaino | 5-10% | 150MB | Medium |
+| Lightwalletd | 5-10% | 200MB | Medium |
+| Faucet | 2-5% | 100MB | Low |
 
-### Timing
+**Total System:**
+- CPU: 0.8-1.0 cores
+- Memory: 750-850MB
+- Disk: 2.5GB
 
-- **Cold start:** 10-15 minutes (101 blocks)
-- **Warm start:** 30 seconds (volumes persist)
-- **Block time:** 5-60 seconds (variable)
-- **Transaction confirmation:** 1 block (~30 sec avg)
+### Timing Benchmarks
+
+| Operation | Zaino | Lightwalletd |
+|-----------|-------|--------------|
+| Cold start | 2-3 min | 3-4 min |
+| Warm restart | 30 sec | 30 sec |
+| Shield tx | 8 sec | 8 sec |
+| Shielded send | 5 sec | 6 sec |
+| Block confirmation | 30-60 sec | 30-60 sec |
+| Wallet sync | 3-5 sec | 5-8 sec |
 
 ---
 
 ## Design Decisions
 
-### Why Docker Compose?
+### Why Embedded Wallet?
 
 **Pros:**
-- Simple single-file orchestration
-- Native on Linux/WSL
-- Profile-based backend switching
-- Volume management built-in
+- Simpler architecture (no external process)
+- Better performance (no IPC overhead)
+- Direct API access (no CLI parsing)
+- Easier error handling
 
 **Cons:**
-- Windows/macOS require Docker Desktop
-- No built-in service mesh
+- Library dependency (must update zingolib)
+- Less flexibility (can't swap wallet implementations)
 
-**Alternative considered:** Kubernetes → Rejected (overkill for dev)
+**Decision:** Pros outweigh cons for development use case
 
-### Why Zingo CLI?
+---
+
+### Why Deterministic Seed?
 
 **Pros:**
-- Official Zcash wallet
-- Supports unified addresses
-- Active development
+- Predictable addresses for testing
+- Easy to reproduce issues
+- Simpler documentation (hardcode example addresses)
 
 **Cons:**
-- Requires lightwalletd (no direct Zebra)
-- Slower than native RPC
+- Not suitable for production
+- Users can't generate custom wallets
 
-**Alternative considered:** Direct Zebra RPC → Rejected (no UA support)
+**Decision:** Perfect for development, clearly documented as dev-only
 
-### Why Python Faucet?
+---
+
+### Why Both Backends?
 
 **Pros:**
-- Fast development
-- Rich HTTP ecosystem (Flask)
-- Easy to extend
+- Tests compatibility with both implementations
+- Developers can choose preferred backend
+- Catches backend-specific bugs
 
 **Cons:**
-- Slower than Rust
-- Extra Docker socket dependency
+- More complex docker-compose
+- Double the testing matrix
 
-**Alternative considered:**  FAUCET SERVICE → Deferred to M3
+**Decision:** Worth it for ecosystem compatibility
+
+---
+
+## Failure Modes
+
+### Network Partitions
+
+**Scenario:** Zaino/LWD can't reach Zebra
+
+**Symptoms:**
+- Sync fails
+- Balance shows 0
+- Transactions fail
+
+**Recovery:**
+- Services auto-retry connection
+- Manual: docker-compose restart faucet
+
+---
+
+### Wallet Desync
+
+**Scenario:** Wallet thinks it's ahead of chain
+
+**Symptoms:**
+- "wallet height > chain height" error
+- Balance incorrect
+
+**Recovery:**
+```bash
+zeckit down
+docker volume rm zeckit_faucet-data
+zeckit up --backend zaino
+```
+
+---
+
+### Mining Stalls
+
+**Scenario:** Zebra stops mining blocks
+
+**Symptoms:**
+- Block count not increasing
+- Transactions stuck in mempool
+
+**Recovery:**
+```bash
+docker-compose restart zebra
+```
 
 ---
 
 ## Future Architecture (M3+)
 
-### Planned Changes
+### Planned Enhancements
 
-1. **Ephemeral Wallet:**
-   ```yaml
-   zingo-wallet:
-     tmpfs:
-       - /var/zingo  # Don't persist between runs
-   ```
+1. Pre-mined Snapshots:
+   - Start with 1000+ pre-mined blocks
+   - Faster startup (under 30 seconds)
 
-2. **Direct Wallet Integration:**
-   - Move from docker exec to gRPC API
-   - Remove Docker socket dependency
+2. GitHub Action Integration:
+   - Reusable workflow
+   - Automated testing in CI
 
-3. **Rate Limiting:**
-   - Redis for distributed rate limits
-   - API keys for authenticated requests
+3. Multi-Wallet Support:
+   - Test wallet-to-wallet transfers
+   - Simulate multi-user scenarios
 
-4. **Monitoring:**
+4. Monitoring:
    - Prometheus metrics
    - Grafana dashboards
+   - Alert on failures
 
 ---
 
-## Troubleshooting Architecture
+## Appendix
 
-### Common Issues
+### Container Dependencies
 
-**Wallet sync error:**
-- **Cause:** Wallet state ahead of blockchain
-- **Fix:** Delete zingo-data volume
+```
+zebra
+  ↓
+zaino/lightwalletd (condition: service_healthy)
+  ↓
+faucet (condition: service_started)
+```
 
-**Port conflicts:**
-- **Cause:** Another service using 8232/8080/9067
-- **Fix:** Change ports in docker-compose.yml
-
-**Out of memory:**
-- **Cause:** Too many services
-- **Fix:** Increase Docker memory limit
+Note: Faucet uses service_started not service_healthy to avoid blocking on slow sync
 
 ---
 
-## References
+### Health Check Details
+
+**Zebra:**
+```yaml
+test: ["CMD-SHELL", "timeout 5 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/8232' || exit 1"]
+interval: 30s
+retries: 10
+start_period: 120s
+```
+
+**Zaino:**
+```yaml
+test: ["CMD-SHELL", "timeout 5 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/9067' || exit 1"]
+interval: 10s
+retries: 60
+start_period: 180s
+```
+
+**Lightwalletd:**
+```yaml
+test: ["CMD-SHELL", "timeout 5 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/9067' || exit 1"]
+interval: 10s
+retries: 30
+start_period: 120s
+```
+
+---
+
+### References
 
 - [Zebra Architecture](https://zebra.zfnd.org/dev.html)
-- [Lightwalletd Protocol](https://github.com/zcash/lightwalletd)
-- [Zingo Wallet](https://github.com/zingolabs/zingolib)
-- [Docker Compose Spec](https://docs.docker.com/compose/compose-file/)
+- [Zaino Documentation](https://github.com/zingolabs/zaino)
+- [Zingolib Documentation](https://github.com/zingolabs/zingolib)
+- [Zcash Protocol](https://zips.z.cash/protocol/protocol.pdf)
+- [ZIP-316: Unified Addresses](https://zips.z.cash/zip-0316)
 
 ---
 
-**Last Updated:** November 24, 2025  
-**Version:** M2 (Real Transactions)
+**Last Updated:** February 7, 2026  
+**Version:** M2 ( Shielded Transactions)  
+**Status:** Complete

@@ -5,12 +5,15 @@ use tracing::info;
 use zingolib::{
     lightclient::LightClient,
     config::{ZingoConfig, ChainType},
+    wallet::{LightWallet, WalletBase},
 };
 use axum::http::Uri;
 use zcash_primitives::consensus::BlockHeight;
 use zebra_chain::parameters::testnet::ConfiguredActivationHeights;
 use zcash_primitives::memo::MemoBytes;
 use zcash_client_backend::zip321::{TransactionRequest, Payment};
+use crate::wallet::seed::SeedManager;
+use bip0039::Mnemonic; 
 
 #[derive(Debug, Clone)]
 pub struct Balance {
@@ -57,6 +60,12 @@ impl WalletManager {
             FaucetError::Wallet(format!("Failed to create wallet directory: {}", e))
         })?;
 
+        // ============================================================
+        // NEW: Get or create deterministic seed
+        // ============================================================
+        let seed_manager = SeedManager::new(&data_dir);
+        let seed_phrase = seed_manager.get_or_create_seed()?;
+        
         let activation_heights = ConfiguredActivationHeights {
             before_overwinter: Some(1),
             overwinter: Some(1),
@@ -65,9 +74,9 @@ impl WalletManager {
             heartwood: Some(1),
             canopy: Some(1),
             nu5: Some(1),
-            nu6: Some(1),
-            nu6_1: Some(1),
-            nu7: Some(1),
+            nu6: None,      // ← Changed to None
+            nu6_1: None,    // ← Changed to None
+            nu7: None,      // ← Changed to None
         };
         let chain_type = ChainType::Regtest(activation_heights);
         
@@ -77,28 +86,46 @@ impl WalletManager {
             .create();
 
         let wallet_path = data_dir.join("zingo-wallet.dat");
+        
+        // ============================================================
+        // Load existing wallet or create new one with deterministic seed
+        // ============================================================
         let client = if wallet_path.exists() {
             info!("Loading existing wallet from {:?}", wallet_path);
             LightClient::create_from_wallet_path(config).map_err(|e| {
                 FaucetError::Wallet(format!("Failed to load wallet: {}", e))
             })?
         } else {
-            info!("Creating new wallet");
-            LightClient::new(
-                config,
+            info!("Creating new wallet with deterministic seed");
+            
+            // Convert seed phrase string to Mnemonic
+            let mnemonic = bip0039::Mnemonic::from_phrase(seed_phrase)
+                .map_err(|e| FaucetError::Wallet(format!("Invalid mnemonic phrase: {}", e)))?;
+            
+            // Create wallet from mnemonic
+            let wallet = LightWallet::new(
+                chain_type,
+                WalletBase::Mnemonic {
+                    mnemonic,
+                    no_of_accounts: std::num::NonZeroU32::new(1).unwrap(),
+                },
                 BlockHeight::from_u32(0),
-                false,
+                config.wallet_settings.clone(),
             ).map_err(|e| {
                 FaucetError::Wallet(format!("Failed to create wallet: {}", e))
+            })?;
+            
+            // Create LightClient from the wallet
+            LightClient::create_from_wallet(wallet, config, false).map_err(|e| {
+                FaucetError::Wallet(format!("Failed to create client from wallet: {}", e))
             })?
         };
 
         let history = TransactionHistory::load(&data_dir)?;
 
-        // REMOVED THE SYNC HERE - let the API endpoint handle syncing
         info!("Wallet initialized successfully (sync not started)");
 
-        Ok(Self { client, history })  // Changed from client_mut
+        Ok(Self { client, history })
     }
 
     pub async fn get_unified_address(&self) -> Result<String, FaucetError> {
@@ -138,6 +165,35 @@ impl WalletManager {
                 .map(|z| z.into_u64())
                 .unwrap_or(0),
         })
+    }
+
+    pub async fn shield_to_orchard(&mut self) -> Result<String, FaucetError> {
+        info!("Shielding transparent funds to Orchard...");
+        
+        let balance = self.get_balance().await?;
+        
+        if balance.transparent == 0 {
+            return Err(FaucetError::Wallet("No transparent funds to shield".to_string()));
+        }
+        
+        info!("Shielding {} ZEC from transparent to orchard", balance.transparent_zec());
+        
+        // Step 1: Propose the shield transaction
+        let _proposal = self.client
+            .propose_shield(zip32::AccountId::ZERO)
+            .await
+            .map_err(|e| FaucetError::Wallet(format!("Shield proposal failed: {}", e)))?;
+        
+        // Step 2: Send the stored proposal
+        let txids = self.client
+            .send_stored_proposal(true)
+            .await
+            .map_err(|e| FaucetError::Wallet(format!("Shield send failed: {}", e)))?;
+        
+        let txid = txids.first().to_string();
+        
+        info!("Shielded transparent funds in txid: {}", txid);
+        Ok(txid)
     }
 
     pub async fn send_transaction(
@@ -222,7 +278,7 @@ impl WalletManager {
     }
 
     pub async fn sync(&mut self) -> Result<(), FaucetError> {
-        self.client.sync().await.map_err(|e| {
+        self.client.sync_and_await().await.map_err(|e| {
             FaucetError::Wallet(format!("Sync failed: {}", e))
         })?;
         Ok(())

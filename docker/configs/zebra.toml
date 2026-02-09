@@ -1,11 +1,6 @@
-# Zebra Configuration for ZecKit
-# Regtest mode with internal miner for automated block generation
-
 [network]
 network = "Regtest"
 listen_addr = "0.0.0.0:8233"
-initial_mainnet_peers = []
-initial_testnet_peers = []
 
 [consensus]
 checkpoint_sync = false
@@ -17,19 +12,9 @@ cache_dir = "/var/zebra/state"
 listen_addr = "0.0.0.0:8232"
 enable_cookie_auth = false
 
-[tracing]
-filter = "info,zebrad=debug"
-use_color = true
-force_use_color = false
-flamegraph = "Off"
-
-[mempool]
-# Enable mempool for transaction testing
-
 [mining]
-# INTERNAL MINER - Automatically mines blocks in regtest
 internal_miner = true
-miner_address = "tm9wDEgKUNDsjKEVwYGLTAVHF2At1GeVi3d"
+miner_address = "tmBsTi2xWTjUdEXnuTceL7fecEQKeWaPDJd"
 
-[metrics]
-# Disable Prometheus metrics
+[network.testnet_parameters.activation_heights]
+NU5 = 1

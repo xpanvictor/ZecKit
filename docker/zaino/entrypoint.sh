@@ -13,7 +13,7 @@ ZAINO_DATA_DIR=${ZAINO_DATA_DIR:-/var/zaino}
 echo "🔍 Resolving Zebra hostname..."
 RESOLVED_IP=$(getent hosts ${ZEBRA_RPC_HOST} | awk '{ print $1 }' | head -1)
 if [ -n "$RESOLVED_IP" ]; then
-    echo "✅ Resolved ${ZEBRA_RPC_HOST} to ${RESOLVED_IP}"
+    echo "Resolved ${ZEBRA_RPC_HOST} to ${RESOLVED_IP}"
     ZEBRA_RPC_HOST=${RESOLVED_IP}
 else
     echo "⚠️  Could not resolve ${ZEBRA_RPC_HOST}, using as-is"
@@ -35,7 +35,7 @@ while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
         -H "Content-Type: application/json" \
         -d '{"jsonrpc":"2.0","id":"health","method":"getblockcount","params":[]}' \
         "http://${ZEBRA_RPC_HOST}:${ZEBRA_RPC_PORT}" > /dev/null 2>&1; then
-        echo "✅ Zebra RPC is ready!"
+        echo "Zebra RPC is ready!"
         break
     fi
     ATTEMPT=$((ATTEMPT + 1))
@@ -68,7 +68,7 @@ while [ "${BLOCK_COUNT}" -lt "10" ]; do
     echo "  Current blocks: ${BLOCK_COUNT}"
 done
 
-echo "✅ Zebra has ${BLOCK_COUNT} blocks!"
+echo "Zebra has ${BLOCK_COUNT} blocks!"
 
 # Create config directory
 mkdir -p ${ZAINO_DATA_DIR}/zainod
@@ -89,7 +89,7 @@ echo "" >> ${ZAINO_DATA_DIR}/zainod/zindexer.toml
 echo "[storage.database]" >> ${ZAINO_DATA_DIR}/zainod/zindexer.toml
 echo "path = \"${ZAINO_DATA_DIR}\"" >> ${ZAINO_DATA_DIR}/zainod/zindexer.toml
 
-echo "✅ Config created at ${ZAINO_DATA_DIR}/zainod/zindexer.toml"
+echo "Config created at ${ZAINO_DATA_DIR}/zainod/zindexer.toml"
 echo "📄 Config contents:"
 cat ${ZAINO_DATA_DIR}/zainod/zindexer.toml
 

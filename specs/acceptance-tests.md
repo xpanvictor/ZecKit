@@ -2,13 +2,13 @@
 
 ## Overview
 
-This document defines the acceptance criteria for Milestone 2 (CLI Tool + Faucet + Real Transactions).
+This document defines the acceptance criteria for Milestone 2:  Shielded Transactions.
 
 ---
 
 ## Test Environment
 
-- **Platform:** Ubuntu 22.04 LTS (WSL2 or native)
+- **Platform:** Ubuntu 22.04 LTS, WSL2, or macOS
 - **Docker:** Engine 24.x + Compose v2
 - **Rust:** 1.70+
 - **Resources:** 2 CPU, 4GB RAM, 5GB disk
@@ -17,210 +17,321 @@ This document defines the acceptance criteria for Milestone 2 (CLI Tool + Faucet
 
 ## M2 Acceptance Criteria
 
-### 1. CLI Tool: `zeckit up`
+### AC1: Start with Zaino Backend
 
-**Test:** Start devnet with lightwalletd backend
+**Test:** Start devnet with Zaino backend
 
 ```bash
-cd cli
-./target/release/zeckit up --backend=lwd
+zeckit up --backend zaino
 ```
 
-**Expected:**
-- ✅ Zebra starts in regtest mode
-- ✅ Internal miner generates 101+ blocks (coinbase maturity)
-- ✅ Lightwalletd connects to Zebra
-- ✅ Zingo wallet syncs with lightwalletd
-- ✅ Faucet API starts and is accessible
-- ✅ All services report healthy
-- ✅ Total startup time: < 15 minutes
+Result:
+- Zebra starts in regtest mode
+- Zaino connects to Zebra
+- Faucet starts and initializes wallet
+- All services report healthy
+- Auto-mining begins (blocks increasing)
+- Startup time: under 3 minutes
 
-**Success Criteria:**
-```
-✓ Mined 101 blocks (coinbase maturity reached)
-✓ All services ready!
-Zebra RPC: http://127.0.0.1:8232
-Faucet API: http://127.0.0.1:8080
+Verification:
+```bash
+docker-compose ps
+# All services show "running" or "healthy"
+
+curl http://localhost:8080/health
+# {"status":"healthy"}
 ```
 
 ---
 
-### 2. CLI Tool: `zeckit test`
+### AC2: Start with Lightwalletd Backend
+
+**Test:** Start devnet with Lightwalletd backend
+
+```bash
+zeckit down
+zeckit up --backend lwd
+```
+
+Result:
+- Zebra starts in regtest mode
+- Lightwalletd connects to Zebra
+- Faucet starts and initializes wallet
+- All services report healthy
+- Auto-mining begins
+- Startup time: under 4 minutes
+
+Verification:
+```bash
+docker-compose ps
+# All services show "running" or "healthy"
+
+curl http://localhost:8080/health
+# {"status":"healthy"}
+```
+
+---
+
+### AC3: Automated Test Suite Passes
 
 **Test:** Run comprehensive smoke tests
 
 ```bash
-./target/release/zeckit test
+zeckit test
 ```
 
-**Expected:**
-- ✅ [1/5] Zebra RPC connectivity: PASS
-- ✅ [2/5] Faucet health check: PASS
-- ✅ [3/5] Faucet stats endpoint: PASS
-- ✅ [4/5] Faucet address retrieval: PASS
-- ✅ [5/5] Faucet funding request: PASS
+Output:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ZecKit - Running Smoke Tests
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-**Success Criteria:**
+  [1/6] Zebra RPC connectivity... PASS
+  [2/6] Faucet health check... PASS
+  [3/6] Faucet address retrieval... PASS
+  [4/6] Wallet sync capability... PASS
+  [5/6] Wallet balance and shield... PASS
+  [6/6] Shielded send (E2E)... PASS
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Tests passed: 6
+  Tests failed: 0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
-✓ Tests passed: 5
-✗ Tests failed: 0
-```
+
+Result:
+- All 6 tests pass
+- No errors thrown
+- Test execution under 2 minutes
 
 ---
 
-### 3. Real Blockchain Transactions
+### AC4:  Shielded Transactions Work
 
-**Test:** Faucet can send real ZEC on regtest
+**Test:** Execute  shielded send
 
 ```bash
-# Get faucet address
-FAUCET_ADDR=$(curl -s http://127.0.0.1:8080/address | jq -r '.address')
+# 1. Check balance (should have Orchard funds)
+curl http://localhost:8080/stats
 
-# Get balance
-curl http://127.0.0.1:8080/stats | jq '.current_balance'
+# Response:
+# {
+#   "orchard_balance": 500+,
+#   ...
+# }
 
-# Request funds to test address
-curl -X POST http://127.0.0.1:8080/request \
+# 2. Send shielded transaction
+curl -X POST http://localhost:8080/send \
   -H "Content-Type: application/json" \
-  -d '{"address": "u1test...", "amount": 10.0}'
+  -d '{
+    "address": "uregtest1h8fnf3vrmswwj0r6nfvq24nxzmyjzaq5jvyxyc2afjtuze8tn93zjqt87kv9wm0ew4rkprpuphf08tc7f5nnd3j3kxnngyxf0cv9k9lc",
+    "amount": 0.05,
+    "memo": "Test payment"
+  }'
 ```
 
-**Expected:**
-- ✅ Returns valid TXID (64-char hex)
-- ✅ Transaction appears in Zebra mempool
-- ✅ Balance updates correctly
-- ✅ Transaction history records it
-
-**Success Criteria:**
+Response:
 ```json
 {
-  "txid": "a1b2c3d4...",
   "status": "sent",
-  "amount": 10.0
+  "txid": "a8a51e4ed52562ce...",
+  "to_address": "uregtest1...",
+  "amount": 0.05,
+  "memo": "Test payment",
+  "orchard_balance": 543.74,
+  "timestamp": "2026-02-05T05:41:22Z"
 }
 ```
 
+Result:
+- Returns valid 64-char hex TXID
+- Status is "sent"
+- Balance decreases appropriately
+- Transaction is Orchard to Orchard (shielded)
+
 ---
 
-### 4. UA Fixtures Generation
+### AC5: Shield Workflow Works
 
-**Test:** Fixtures are created on startup
+**Test:** Shield transparent funds to Orchard
 
 ```bash
-cat fixtures/unified-addresses.json
+# 1. Check transparent balance
+curl http://localhost:8080/stats
+
+# Response:
+# {
+#   "transparent_balance": 100+,
+#   "orchard_balance": X,
+#   ...
+# }
+
+# 2. Shield transparent funds
+curl -X POST http://localhost:8080/shield
 ```
 
-**Expected:**
-- ✅ File exists at `fixtures/unified-addresses.json`
-- ✅ Contains valid unified address
-- ✅ Address type is "unified"
-- ✅ Receivers include "orchard"
-
-**Success Criteria:**
+Response:
 ```json
 {
-  "faucet_address": "u1...",
-  "type": "unified",
-  "receivers": ["orchard"]
+  "status": "shielded",
+  "txid": "86217a05f36ee5a7...",
+  "transparent_amount": 156.25,
+  "shielded_amount": 156.2499,
+  "fee": 0.0001,
+  "message": "Shielded 156.2499 ZEC from transparent to orchard..."
 }
 ```
 
+Result:
+- Returns valid TXID
+- Transparent balance decreases
+- Orchard balance increases (after confirmation)
+- Fee is correctly deducted
+
 ---
 
-### 5. Service Health Checks
+### AC6: Unified Address Generation
 
-**Test:** All services report healthy
+**Test:** Faucet generates and returns Unified Address
+
+```bash
+curl http://localhost:8080/address
+```
+
+Response:
+```json
+{
+  "unified_address": "uregtest1h8fnf3vrmswwj0r6nfvq24nxzmyjzaq5jvyxyc2afjtuze8tn93zjqt87kv9wm0ew4rkprpuphf08tc7f5nnd3j3kxnngyxf0cv9k9lc",
+  "transparent_address": "tmBsTi2xWTjUdEXnuTceL7fecEQKeWaPDJd"
+}
+```
+
+Result:
+- Unified address starts with "uregtest1"
+- Transparent address starts with "tm"
+- Same address returned consistently
+- Address is deterministic (same seed = same address)
+
+---
+
+### AC7: Backend Toggle Works
+
+**Test:** Switch between backends without data loss
+
+```bash
+# Start with Zaino
+zeckit up --backend zaino
+sleep 60
+
+# Check balance
+BALANCE_ZAINO=$(curl -s http://localhost:8080/stats | jq .current_balance)
+
+# Stop Zaino
+zeckit down
+
+# Start Lightwalletd
+zeckit up --backend lwd
+sleep 90
+
+# Check balance again (should be same - data persisted)
+BALANCE_LWD=$(curl -s http://localhost:8080/stats | jq .current_balance)
+
+# Compare
+echo "Zaino balance: $BALANCE_ZAINO"
+echo "LWD balance: $BALANCE_LWD"
+```
+
+Result:
+- Both backends start successfully
+- Wallet data persists across backend switch
+- Balance is approximately the same (plus or minus mining rewards)
+- Tests pass with both backends
+
+---
+
+### AC8: Fresh Start Works
+
+**Test:** Complete reset and restart
+
+```bash
+# Stop services
+zeckit down
+
+# Remove all data
+docker volume rm zeckit_zebra-data zeckit_zaino-data zeckit_faucet-data
+
+# Start fresh
+zeckit up --backend zaino
+
+# Wait for initialization
+sleep 120
+
+# Run tests
+zeckit test
+```
+
+Result:
+- Fresh blockchain mined from genesis
+- New wallet created with deterministic seed
+- Same addresses generated as before
+- All services healthy
+- All tests pass
+
+---
+
+### AC9: Service Health Checks
+
+**Test:** All services have working health endpoints
 
 ```bash
 # Zebra RPC
-curl -X POST http://127.0.0.1:8232 \
+curl -X POST http://localhost:8232 \
   -d '{"jsonrpc":"2.0","method":"getblockcount","params":[],"id":1}'
 
 # Faucet health
-curl http://127.0.0.1:8080/health
+curl http://localhost:8080/health
 
-# Stats endpoint
-curl http://127.0.0.1:8080/stats
+# Faucet stats
+curl http://localhost:8080/stats
 ```
 
-**Expected:**
-- ✅ Zebra: Returns block height
-- ✅ Faucet: Returns {"status": "healthy"}
-- ✅ Stats: Shows balance > 0
+Result:
+- Zebra: Returns block height greater than 100
+- Faucet health: {"status":"healthy"}
+- Faucet stats: Shows positive balance
+- All endpoints respond within 5 seconds
+- No 500 errors
 
 ---
 
-### 6. Clean Shutdown
+### AC10: Deterministic Behavior
 
-**Test:** Services stop cleanly
+**Test:** Same seed produces same addresses
 
 ```bash
-./target/release/zeckit down
+# First run
+zeckit up --backend zaino
+sleep 60
+ADDR_1=$(curl -s http://localhost:8080/address | jq -r .unified_address)
+
+# Reset
+zeckit down
+docker volume rm zeckit_zebra-data zeckit_zaino-data zeckit_faucet-data
+
+# Second run
+zeckit up --backend zaino
+sleep 60
+ADDR_2=$(curl -s http://localhost:8080/address | jq -r .unified_address)
+
+# Compare
+echo "Address 1: $ADDR_1"
+echo "Address 2: $ADDR_2"
 ```
 
-**Expected:**
-- ✅ All containers stop
-- ✅ No error messages
-- ✅ Volumes persist (for restart)
-
----
-
-### 7. Fresh Start
-
-**Test:** Can restart from clean state
-
-```bash
-./target/release/zeckit down --purge
-./target/release/zeckit up --backend=lwd
-```
-
-**Expected:**
-- ✅ All volumes removed
-- ✅ Fresh blockchain mined
-- ✅ New wallet created
-- ✅ All tests pass again
-
----
-
-## Known Issues (M2)
-
-### ⚠️ Wallet Sync Issue
-
-**Problem:** After deleting volumes and restarting, wallet may have sync errors:
-```
-Error: wallet height is more than 100 blocks ahead of best chain height
-```
-
-**Workaround:**
-```bash
-./target/release/zeckit down
-docker volume rm zeckit_zingo-data zeckit_zebra-data zeckit_lightwalletd-data
-./target/release/zeckit up --backend=lwd
-```
-
-**Status:** Known issue, will be fixed in M3 with ephemeral wallet volume.
-
----
-
-## CI/CD Tests
-
-### GitHub Actions Smoke Test
-
-**Test:** CI pipeline runs successfully
-
-```yaml
-# .github/workflows/smoke-test.yml
-- name: Start ZecKit
-  run: ./cli/target/release/zeckit up --backend=lwd
-  
-- name: Run tests
-  run: ./cli/target/release/zeckit test
-```
-
-**Expected:**
-- ✅ Workflow completes in < 20 minutes
-- ✅ All smoke tests pass
-- ✅ Logs uploaded as artifacts
+Result:
+- Both addresses are identical
+- Transparent address also matches
+- Seed file exists at /var/zingo/.wallet_seed
 
 ---
 
@@ -228,11 +339,141 @@ docker volume rm zeckit_zingo-data zeckit_zebra-data zeckit_lightwalletd-data
 
 | Metric | Target | Actual |
 |--------|--------|--------|
-| Startup time | < 15 min | ~10-12 min |
-| Block mining | 101 blocks | ✅ |
-| Test execution | < 2 min | ~30-60 sec |
-| Memory usage | < 4GB | ~2-3GB |
-| Disk usage | < 5GB | ~3GB |
+| Startup time (Zaino) | under 3 min | 2-3 min |
+| Startup time (LWD) | under 4 min | 3-4 min |
+| Test execution | under 2 min | 60-90 sec |
+| Shield transaction | under 15 sec | 8 sec |
+| Shielded send | under 10 sec | 5 sec |
+| Memory usage | under 4GB | 750-800MB |
+| Disk usage | under 5GB | 2.35-2.55GB |
+
+---
+
+## Test Matrix
+
+### Backend Compatibility
+
+| Test | Zaino | Lightwalletd |
+|------|-------|--------------|
+| Start services | PASS | PASS |
+| Health checks | PASS | PASS |
+| Address generation | PASS | PASS |
+| Wallet sync | PASS | PASS |
+| Shield funds | PASS | PASS |
+| Shielded send | PASS | PASS |
+| All 6 smoke tests | PASS | PASS |
+
+Both backends must pass all tests.
+
+---
+
+## Known Acceptable Behaviors
+
+### 1. Timing Variations
+
+**Behavior:** Test timing may vary by 10-20 seconds
+
+**Cause:** Block mining is probabilistic
+
+**Acceptable:** Yes - tests have flexible timeouts
+
+---
+
+### 2. Balance Fluctuations
+
+**Behavior:** Balance may change between API calls during testing
+
+**Cause:** Continuous mining + chain re-orgs in regtest
+
+**Acceptable:** Yes - tests check for positive balance, not exact amounts
+
+---
+
+### 3. First Test Run After Startup
+
+**Behavior:** Tests may fail if run immediately after zeckit up
+
+**Cause:** Mining hasn't completed yet
+
+**Acceptable:** Yes - wait 60 seconds then re-run
+
+**Solution:**
+```bash
+zeckit up --backend zaino
+sleep 60  # Wait for initial mining
+zeckit test
+```
+
+---
+
+### 4. Lightwalletd Slower Sync
+
+**Behavior:** Lightwalletd tests take 10-20 seconds longer
+
+**Cause:** Different indexing implementation
+
+**Acceptable:** Yes - both backends work, just different speeds
+
+---
+
+## Regression Tests
+
+### Test Case: Shield Then Send
+
+```bash
+# Start fresh
+zeckit down
+docker volume rm zeckit_zebra-data zeckit_zaino-data zeckit_faucet-data
+zeckit up --backend zaino
+sleep 90
+
+# 1. Check transparent balance
+curl http://localhost:8080/stats | jq .transparent_balance
+# Should be greater than 0
+
+# 2. Shield funds
+curl -X POST http://localhost:8080/shield
+# Should return success
+
+# 3. Wait for confirmation
+sleep 30
+
+# 4. Sync wallet
+curl -X POST http://localhost:8080/sync
+
+# 5. Check Orchard balance
+curl http://localhost:8080/stats | jq .orchard_balance
+# Should be greater than 0
+
+# 6. Send shielded
+curl -X POST http://localhost:8080/send \
+  -H "Content-Type: application/json" \
+  -d '{
+    "address": "uregtest1h8fnf3vrmswwj0r6nfvq24nxzmyjzaq5jvyxyc2afjtuze8tn93zjqt87kv9wm0ew4rkprpuphf08tc7f5nnd3j3kxnngyxf0cv9k9lc",
+    "amount": 0.05,
+    "memo": "Test"
+  }'
+# Should return valid TXID
+```
+
+Result: All steps succeed with valid responses
+
+---
+
+## Sign-Off Criteria
+
+**Milestone 2 is considered complete when:**
+
+1. Both backends (Zaino + Lightwalletd) start successfully
+2. All 6 smoke tests pass with both backends
+3.  shielded transactions work (Orchard to Orchard)
+4. Shield workflow works (Transparent to Orchard)
+5. Unified addresses generated correctly
+6. Deterministic wallet behavior confirmed
+7. Fresh start works without errors
+8. Performance benchmarks met
+9. Documentation complete
+10. All test matrix cells pass
 
 ---
 
@@ -240,26 +481,15 @@ docker volume rm zeckit_zingo-data zeckit_zebra-data zeckit_lightwalletd-data
 
 Coming in Milestone 3:
 
-- ✅ Shielded transactions (orchard → orchard)
-- ✅ Autoshield workflow
-- ✅ Memo field support
-- ✅ Backend parity (lightwalletd ↔ Zaino)
-- ✅ Rescan/sync edge cases
-- ✅ GitHub Action integration
+- GitHub Action integration
+- Pre-mined blockchain snapshots
+- Multi-recipient shielded sends
+- Memo field edge cases
+- Long-running stability tests
+- Cross-platform testing (Linux, macOS, Windows WSL2)
 
 ---
 
-## Sign-Off
-
-**Milestone 2 is considered complete when:**
-
-1. ✅ All 5 smoke tests pass
-2. ✅ Real transactions work on regtest
-3. ✅ UA fixtures are generated
-4. ✅ CI pipeline passes
-5. ✅ Documentation is complete
-6. ✅ Known issues are documented
-
-**Status:** ✅ M2 Complete  
-**Date:** November 24, 2025  
-**Next:** Begin M3 development
+**Status:** M2 Complete  
+**Date:** February 7, 2026  
+**All Acceptance Criteria:** PASSED

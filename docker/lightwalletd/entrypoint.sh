@@ -23,7 +23,7 @@ while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
         -H "Content-Type: application/json" \
         -d '{"jsonrpc":"2.0","id":"health","method":"getblockcount","params":[]}' \
         "http://${ZEBRA_RPC_HOST}:${ZEBRA_RPC_PORT}" > /dev/null 2>&1; then
-        echo "✅ Zebra RPC is ready!"
+        echo "Zebra RPC is ready!"
         break
     fi
     ATTEMPT=$((ATTEMPT + 1))

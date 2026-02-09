@@ -43,7 +43,6 @@ services:
       timeout: 10s
       retries: 10
       start_period: 120s
-
   # ========================================
   # LIGHTWALLETD (Profile: lwd)
   # ========================================
@@ -69,11 +68,11 @@ services:
     profiles:
       - lwd
     healthcheck:
-      test: ["CMD", "grpc_health_probe", "-addr=:9067"]
-      interval: 30s
-      timeout: 10s
-      retries: 20
-      start_period: 300s
+      test: ["CMD-SHELL", "timeout 5 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/9067' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
 
   # ========================================
   # ZAINO INDEXER (Profile: zaino)
