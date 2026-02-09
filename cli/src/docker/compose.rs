@@ -254,7 +254,10 @@ impl DockerCompose {
 fn tail_log(path: &str, max_lines: usize) -> Option<String> {
     let file = File::open(path).ok()?;
     let reader = BufReader::new(file);
-    let lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
+    let lines: Vec<String> = reader
+        .lines()
+        .filter_map(|line: std::io::Result<String>| line.ok())
+        .collect();
     let start = lines.len().saturating_sub(max_lines);
     Some(lines[start..].join("\n"))
 }
