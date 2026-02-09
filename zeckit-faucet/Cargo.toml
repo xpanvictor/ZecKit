@@ -47,7 +47,7 @@ tonic = "0.14.3"
 bip0039 = "0.12"
 
 [patch.crates-io]
-zebra-chain = "=3.1.0"
+zebra-chain = { git = "https://github.com/ZcashFoundation/zebra", tag = "v3.1.0" }
 
 [dev-dependencies]
 tempfile = "3.0"
