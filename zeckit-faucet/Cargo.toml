@@ -49,6 +49,9 @@ bip0039 = "0.12"
 [patch.crates-io]
 zebra-chain = { git = "https://github.com/ZcashFoundation/zebra", tag = "v3.1.0" }
 
+[patch."https://github.com/ZcashFoundation/zebra"]
+zebra-chain = { git = "https://github.com/ZcashFoundation/zebra", tag = "v3.1.0" }
+
 [dev-dependencies]
 tempfile = "3.0"
 mockito = "1.0"
